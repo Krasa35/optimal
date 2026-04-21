@@ -1,15 +1,16 @@
 from pathlib import Path
 import time
-
 import crocoddyl
 import mujoco
 import mujoco.viewer
 import numpy as np
 
-MODEL_PATH = Path(__file__).resolve().parent / "models" / "UR5gripper_2_finger_KKI.xml"
+from optimal.RobotDiffModel import RobotDiffModel
+
+MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "UR5gripper_2_finger_KKI.xml"
 DT = 1e-2
 HORIZON = 50
-MAX_DDP_ITERS = 100
+MAX_DDP_ITERS = 10
 ENABLE_VERBOSE_CALLBACK = True
 SHOW_PROGRESS = True
 WARM_START_KP = 3.0
@@ -24,15 +25,15 @@ ACTUATED_JOINTS = (
     "wrist_3_joint",
     "base_to_lik",
 )
-# TARGET_JOINT_POSITIONS = {
-#     "shoulder_pan_joint": 1.2,
-#     "shoulder_lift_joint": -1.0,
-#     "elbow_joint": 1.4,
-#     "wrist_1_joint": -1.2,
-#     "wrist_2_joint": 1.0,
-#     "wrist_3_joint": 0.0,
-#     "base_to_lik": 0.35,
-# }
+START_JOINT_POSITIONS = {
+    "shoulder_pan_joint": 0.0,
+    "shoulder_lift_joint": -1.57,
+    "elbow_joint": 1.57,
+    "wrist_1_joint": 0.0,
+    "wrist_2_joint": 0.0,
+    "wrist_3_joint": 0.0,
+    "base_to_lik": 0.0,
+}
 TARGET_JOINT_POSITIONS = {
     "shoulder_pan_joint": 0.3,#.2,
     "shoulder_lift_joint": 0.0,
@@ -176,70 +177,6 @@ def _build_warm_start_trajectory(
     return warm_xs, warm_us
 
 
-class MujocoUR5ActuatedDiffModel(crocoddyl.DifferentialActionModelAbstract):
-    def __init__(
-        self,
-        model: mujoco.MjModel,
-        q_indices: np.ndarray,
-        v_indices: np.ndarray,
-        q_nominal: np.ndarray,
-        v_nominal: np.ndarray,
-        state: crocoddyl.StateVector,
-        x_target: np.ndarray,
-        w_q: float,
-        w_v: float,
-        w_u: float,
-    ) -> None:
-        super().__init__(state, model.nu, 1)
-        self.model = model
-        self.mj_data = mujoco.MjData(model)
-        self.q_indices = q_indices
-        self.v_indices = v_indices
-        self.q_nominal = q_nominal.copy()
-        self.v_nominal = v_nominal.copy()
-        self.x_target = x_target.copy()
-        self.nq = q_indices.size
-        self.nv = v_indices.size
-        self.w_q = w_q
-        self.w_v = w_v
-        self.w_u = w_u
-        self.ctrl_min = model.actuator_ctrlrange[:, 0].copy() if model.nu > 0 else np.zeros(0)
-        self.ctrl_max = model.actuator_ctrlrange[:, 1].copy() if model.nu > 0 else np.zeros(0)
-        self.has_ctrl_limits = bool(np.any(model.actuator_ctrllimited)) if model.nu > 0 else False
-
-    def calc(self, data, x, u=None) -> None:
-        if u is None:
-            u = np.zeros(self.nu)
-        else:
-            u = np.asarray(u, dtype=float).reshape(self.nu)
-
-        if self.has_ctrl_limits:
-            u = np.clip(u, self.ctrl_min, self.ctrl_max)
-
-        q = x[: self.nq]
-        v = x[self.nq :]
-
-        self.mj_data.qpos[:] = self.q_nominal
-        self.mj_data.qvel[:] = self.v_nominal
-        self.mj_data.qpos[self.q_indices] = q
-        self.mj_data.qvel[self.v_indices] = v
-        if self.model.nu > 0:
-            self.mj_data.ctrl[:] = u
-        mujoco.mj_forward(self.model, self.mj_data)
-
-        vdot = self.mj_data.qacc[self.v_indices].copy()
-        data.xout[:] = vdot
-
-        dq = q - self.x_target[: self.nq]
-        dv = v - self.x_target[self.nq :]
-        data.cost = (
-            0.5 * self.w_q * float(dq @ dq)
-            + 0.5 * self.w_v * float(dv @ dv)
-            + 0.5 * self.w_u * float(u @ u)
-        )
-
-    def calcDiff(self, data, x, u=None) -> None:
-        pass
 
 
 def solve_ocp(model: mujoco.MjModel):
@@ -255,10 +192,10 @@ def solve_ocp(model: mujoco.MjModel):
         f"Horizon={HORIZON}, max_iters={MAX_DDP_ITERS}."
     )
 
-    running_diff = MujocoUR5ActuatedDiffModel(
+    running_diff = RobotDiffModel(
         model, q_indices, v_indices, q_nominal, v_nominal, state, x_target, w_q=2.0, w_v=0.01, w_u=1e-4
     )
-    terminal_diff = MujocoUR5ActuatedDiffModel(
+    terminal_diff = RobotDiffModel(
         model, q_indices, v_indices, q_nominal, v_nominal, state, x_target, w_q=1000.0, w_v=2.0, w_u=0.0
     )
 
@@ -292,7 +229,23 @@ def solve_ocp(model: mujoco.MjModel):
 def main() -> None:
     _progress(f"Loading MuJoCo model from {MODEL_PATH} ...")
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
+    model.qpos0[:7] = [START_JOINT_POSITIONS[joint] for joint in START_JOINT_POSITIONS]
     sim_data = mujoco.MjData(model)
+    print("Current sim_data.qpos:", sim_data.qpos)
+    mujoco.mj_forward(model, sim_data)
+    with mujoco.viewer.launch_passive(model, sim_data) as viewer:
+        loop_idx = 0
+        while viewer.is_running():
+            print(f"[progress] Initial pose loop {loop_idx} started.")
+            mujoco.mj_resetData(model, sim_data)
+            mujoco.mj_forward(model, sim_data)
+            viewer.sync()
+            time.sleep(0.1)
+    # print(sim_data.qpos)
+    # for i in range(model.nu):
+    #     print(f"Joint {i}: {mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)}")
+    # mujoco.mj_forward(model, sim_data)
+    # print(sim_data.qpos)
     _progress("Model loaded. Solving optimal control...")
     solver, ok, control_norms, q_indices, v_indices, q_nominal, v_nominal = solve_ocp(model)
     print("solver.solve returned:", ok)
@@ -337,6 +290,49 @@ def main() -> None:
 
             _progress(f"Playback loop {loop_idx} finished in {time.time() - playback_t0:.2f}s.")
 
+def main2():
+    _progress(f"Loading MuJoCo model from {MODEL_PATH} ...")
+    model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
+    sim_data = mujoco.MjData(model)
+
+    # 1. Set the positions safely using the joint names
+    for joint_name, target_pos in START_JOINT_POSITIONS.items():
+        try:
+            # Find the ID of the joint
+            joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+            if joint_id != -1:
+                # Find where this joint's data lives in the qpos array
+                qpos_adr = model.jnt_qposadr[joint_id]
+                
+                # Update both the current position and the controller target
+                sim_data.qpos[qpos_adr] = target_pos
+                
+                # If you have actuators with the same name, set their targets too
+                actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, joint_name)
+                if actuator_id != -1:
+                    sim_data.ctrl[actuator_id] = target_pos
+        except Exception as e:
+            print(f"Error setting {joint_name}: {e}")
+
+    print("Target initialized. Current sim_data.qpos:", sim_data.qpos)
+
+    # 2. Forward kinematics to update the 3D geometry with the new positions
+    mujoco.mj_forward(model, sim_data)
+
+    # 3. Viewer loop
+    with mujoco.viewer.launch_passive(model, sim_data) as viewer:
+        while viewer.is_running():
+            # DO NOT call mj_resetData here! It will wipe your custom positions.
+            
+            # Step the physics engine forward
+            mujoco.mj_step(model, sim_data)
+            
+            # Sync the viewer to the new physics state
+            viewer.sync()
+            time.sleep(0.01)
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
