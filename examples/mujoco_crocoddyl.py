@@ -4,8 +4,11 @@ import crocoddyl
 import mujoco
 import mujoco.viewer
 import numpy as np
+import logging
 
+from optimal.utils import setup_strict_logging
 from optimal.RobotDiffModel import RobotDiffModel
+from optimal.RobotMujocoModel import RobotMujocoModel
 
 MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "UR5gripper_2_finger_KKI.xml"
 DT = 1e-2
@@ -43,6 +46,7 @@ TARGET_JOINT_POSITIONS = {
     "wrist_3_joint": 0.0,
     "base_to_lik": 0.0,
 }
+setup_strict_logging()
 
 
 def _progress(message: str) -> None:
@@ -226,7 +230,21 @@ def solve_ocp(model: mujoco.MjModel):
     return solver, ok, control_norms, q_indices, v_indices, q_nominal, v_nominal
 
 
-def main() -> None:
+def main():
+    logging.info("Starting MuJoCo + Crocoddyl example...")
+    MujModel = RobotMujocoModel(MODEL_PATH)
+    MujModel.set_joint_values(START_JOINT_POSITIONS)
+    logging.info(f"MujModel.joint_names: {MujModel.joint_names}")
+    logging.info(f"Joint values after initialization: {MujModel.joint_positions}")
+    with mujoco.viewer.launch_passive(MujModel.model, MujModel.data) as viewer:
+        while viewer.is_running():
+            mujoco.mj_step(MujModel.model, MujModel.data)
+            viewer.sync()
+            time.sleep(0.01)
+
+
+
+def main1() -> None:
     _progress(f"Loading MuJoCo model from {MODEL_PATH} ...")
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
     model.qpos0[:7] = [START_JOINT_POSITIONS[joint] for joint in START_JOINT_POSITIONS]

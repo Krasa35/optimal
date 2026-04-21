@@ -17,7 +17,7 @@ from pyquaternion import Quaternion
 import cv2 as cv
 import matplotlib.pyplot as plt
 import copy
-from utils.decorators import debug
+from examples.utils.decorators import debug
 import datetime
 
 
