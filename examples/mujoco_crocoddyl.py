@@ -234,13 +234,15 @@ def main():
     logging.info("Starting MuJoCo + Crocoddyl example...")
     MujModel = RobotMujocoModel(MODEL_PATH)
     MujModel.set_joint_values(START_JOINT_POSITIONS)
-    logging.info(f"MujModel.joint_names: {MujModel.joint_names}")
-    logging.info(f"Joint values after initialization: {MujModel.joint_positions}")
-    with mujoco.viewer.launch_passive(MujModel.model, MujModel.data) as viewer:
-        while viewer.is_running():
-            mujoco.mj_step(MujModel.model, MujModel.data)
-            viewer.sync()
-            time.sleep(0.01)
+    q, v, l = _build_index_arrays(MujModel.model)
+    print("q_indices:", q)
+    print("v_indices:", v)
+    print("local_index_by_name:", l)
+    # with mujoco.viewer.launch_passive(MujModel.model, MujModel.data) as viewer:
+    #     while viewer.is_running():
+    #         mujoco.mj_step(MujModel.model, MujModel.data)
+    #         viewer.sync()
+    #         time.sleep(0.01)
 
 
 
@@ -348,9 +350,6 @@ def main2():
             # Sync the viewer to the new physics state
             viewer.sync()
             time.sleep(0.01)
-
-if __name__ == "__main__":
-    main()
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,5 @@
 import logging
+from xml.parsers.expat import model
 import mujoco
 import numpy as np
 
@@ -7,8 +8,6 @@ class RobotMujocoModel:
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.data = mujoco.MjData(self.model)
         logging.info(f"Model loaded from {model_path}.")
-
-
 
     def set_joint_values(self, q: dict[str, float]) -> None:
         for joint_name, target_pos in q.items():
@@ -28,6 +27,16 @@ class RobotMujocoModel:
                         self.data.ctrl[actuator_id] = target_pos
             except Exception as e:
                 print(f"Error setting {joint_name}: {e}")
+
+    def reset(self) -> None:
+        self.data.qpos[:] = 0.0
+        self.data.ctrl[:] = 0.0
+
+    def snapshot(self) -> np.ndarray:
+        mujoco.mj_forward(self.model, self.data) 
+        renderer = mujoco.Renderer(self.model, height=480, width=640)
+        renderer.update_scene(self.data)
+        return renderer.render()
     
     @property
     def joint_names(self) -> list[str]:

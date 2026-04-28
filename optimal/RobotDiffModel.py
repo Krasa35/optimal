@@ -24,7 +24,7 @@ class RobotDiffModel(crocoddyl.DifferentialActionModelAbstract):
         self.q_nominal = q_nominal.copy()
         self.v_nominal = v_nominal.copy()
         self.x_target = x_target.copy()
-        self.nq = q_indices.size
+        self.nq = q_indices.sizeMae
         self.nv = v_indices.size
         self.w_q = w_q
         self.w_v = w_v
