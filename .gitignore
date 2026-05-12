@@ -3,3 +3,4 @@ plt*.png
 misc/*.pdf
 typings
 *.egg-info
+.github

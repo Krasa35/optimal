@@ -124,65 +124,6 @@ def _build_joint_to_actuator_indices(
         )
     return joint_to_actuator
 
-
-def _build_warm_start_trajectory(
-    model: mujoco.MjModel,
-    q_indices: np.ndarray,
-    v_indices: np.ndarray,
-    joint_to_actuator: np.ndarray,
-    x0: np.ndarray,
-    x_target: np.ndarray,
-    q_nominal: np.ndarray,
-    v_nominal: np.ndarray,
-) -> tuple[list[np.ndarray], list[np.ndarray]]:
-    nq = q_indices.size
-    sim_data = mujoco.MjData(model)
-    mujoco.mj_resetData(model, sim_data)
-    sim_data.qpos[:] = q_nominal
-    sim_data.qvel[:] = v_nominal
-    sim_data.qpos[q_indices] = x0[:nq]
-    sim_data.qvel[v_indices] = x0[nq:]
-    mujoco.mj_forward(model, sim_data)
-
-    ctrl_min = model.actuator_ctrlrange[:, 0] if model.nu > 0 else np.zeros(0)
-    ctrl_max = model.actuator_ctrlrange[:, 1] if model.nu > 0 else np.zeros(0)
-    has_ctrl_limits = bool(np.any(model.actuator_ctrllimited)) if model.nu > 0 else False
-    n_substeps = max(1, int(round(DT / model.opt.timestep)))
-
-    warm_xs = [x0.copy()]
-    warm_us: list[np.ndarray] = []
-    q_start = x0[:nq]
-    q_goal = x_target[:nq]
-
-    for k in range(HORIZON):
-        alpha = (k + 1) / HORIZON
-        q_des = (1.0 - alpha) * q_start + alpha * q_goal
-        q_curr = sim_data.qpos[q_indices]
-        v_curr = sim_data.qvel[v_indices]
-        tau_local = WARM_START_KP * (q_des - q_curr) - WARM_START_KD * v_curr
-
-        u = np.zeros(model.nu)
-        for local_idx, actuator_id in enumerate(joint_to_actuator):
-            u[actuator_id] = tau_local[local_idx]
-        if has_ctrl_limits:
-            u = np.clip(u, ctrl_min, ctrl_max)
-
-        warm_us.append(u.copy())
-        if model.nu > 0:
-            sim_data.ctrl[:] = u
-        for _ in range(n_substeps):
-            mujoco.mj_step(model, sim_data)
-
-        x_next = np.concatenate([sim_data.qpos[q_indices].copy(), sim_data.qvel[v_indices].copy()])
-        if not np.all(np.isfinite(x_next)):
-            raise ValueError("Warm-start rollout produced non-finite states.")
-        warm_xs.append(x_next)
-
-    return warm_xs, warm_us
-
-
-
-
 def solve_ocp(model: mujoco.MjModel):
     _progress("Building OCP model...")
     q_indices, v_indices, local_index_by_name = _build_index_arrays(model)
@@ -233,11 +174,50 @@ def solve_ocp(model: mujoco.MjModel):
 def main():
     logging.info("Starting MuJoCo + Crocoddyl example...")
     MujModel = RobotMujocoModel(MODEL_PATH)
-    MujModel.set_joint_values(START_JOINT_POSITIONS)
-    q, v, l = _build_index_arrays(MujModel.model)
-    print("q_indices:", q)
-    print("v_indices:", v)
-    print("local_index_by_name:", l)
+    MujModel.joint_positions = START_JOINT_POSITIONS
+    #
+    state = crocoddyl.StateVector(MujModel.q_indices.size + MujModel.v_indices.size)
+    q_indices = MujModel.q_indices()
+    v_indices = MujModel.v_indices()
+    q_nominal = MujModel.joint_positions.copy()
+    v_nominal = np.zeros_like(q_nominal)
+    x0 = np.concatenate([q_nominal[q_indices], v_nominal[v_indices]])
+    x_target = [TARGET_JOINT_POSITIONS[joint] for joint in MujModel.actuated_joint_names] + [0.0] * v_indices.size
+    #
+    running_diff = RobotDiffModel(
+        MujModel.model, q_indices, v_indices, q_nominal, v_nominal, state, x_target, w_q=2.0, w_v=0.01, w_u=1e-4
+    )
+    terminal_diff = RobotDiffModel(
+        MujModel.model, q_indices, v_indices, q_nominal, v_nominal, state, x_target, w_q=1000.0, w_v=2.0, w_u=0.0
+    )
+
+    running_model = crocoddyl.IntegratedActionModelEuler(
+        crocoddyl.DifferentialActionModelNumDiff(running_diff, False), DT
+    )
+    terminal_model = crocoddyl.IntegratedActionModelEuler(
+        crocoddyl.DifferentialActionModelNumDiff(terminal_diff, False), 0.0
+    )
+
+    problem = crocoddyl.ShootingProblem(x0, [running_model] * HORIZON, terminal_model)
+    solver = crocoddyl.SolverFDDP(problem)
+    if ENABLE_VERBOSE_CALLBACK:
+        solver.setCallbacks([crocoddyl.CallbackVerbose()])
+
+    _progress("Building warm-start rollout...")
+    init_xs, init_us = _build_warm_start_trajectory(
+        MujModel.model, q_indices, v_indices, joint_to_actuator, x0, x_target, q_nominal, v_nominal
+    )
+
+    _progress("Starting solver...")
+    solve_t0 = time.time()
+    solver.th_stop = 9e-2
+    ok = solver.solve(init_xs, init_us, MAX_DDP_ITERS, False, 1e-4)
+    solve_dt = time.time() - solve_t0
+    _progress(f"Solver finished in {solve_dt:.2f}s after {solver.iter} iterations.")
+    control_norms = [float(np.linalg.norm(np.asarray(u))) for u in solver.us]
+    return solver, ok, control_norms, q_indices, v_indices, q_nominal, v_nominal
+
+
     # with mujoco.viewer.launch_passive(MujModel.model, MujModel.data) as viewer:
     #     while viewer.is_running():
     #         mujoco.mj_step(MujModel.model, MujModel.data)
