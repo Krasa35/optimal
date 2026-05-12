@@ -1,37 +1,34 @@
 import mujoco
 import numpy as np
 import crocoddyl
+from RobotMujocoModel import RobotMujocoModel
 
-class RobotDiffModel(crocoddyl.DifferentialActionModelAbstract):
+class RobotDiffActionModel(crocoddyl.DifferentialActionModelAbstract):
     def __init__(
         self,
-        model: mujoco.MjModel,
-        q_indices: np.ndarray,
-        v_indices: np.ndarray,
-        q_nominal: np.ndarray,
-        v_nominal: np.ndarray,
+        mjmodel: RobotMujocoModel,
         state: crocoddyl.StateVector,
         x_target: np.ndarray,
-        w_q: float,
-        w_v: float,
-        w_u: float,
+        w_q: float = 1.0,
+        w_v: float = 1.0,
+        w_u: float = 1.0,
     ) -> None:
-        super().__init__(state, model.nu, 1)
-        self.model = model
-        self.mj_data = mujoco.MjData(model)
-        self.q_indices = q_indices
-        self.v_indices = v_indices
-        self.q_nominal = q_nominal.copy()
-        self.v_nominal = v_nominal.copy()
+        super().__init__(state, mjmodel.model.nu, 1)
+        self.mjmodel = mjmodel
+        self.mj_data = mujoco.MjData(mjmodel.model)
+        self.q_indices = mjmodel.q_indices()
+        self.v_indices = mjmodel.v_indices()
+        self.q_nominal = mjmodel.joint_positions.copy()
+        self.v_nominal = np.zeros_like(self.q_nominal)
         self.x_target = x_target.copy()
-        self.nq = q_indices.sizeMae
-        self.nv = v_indices.size
+        self.nq = self.q_indices.size
+        self.nv = self.v_indices.size
         self.w_q = w_q
         self.w_v = w_v
         self.w_u = w_u
-        self.ctrl_min = model.actuator_ctrlrange[:, 0].copy() if model.nu > 0 else np.zeros(0)
-        self.ctrl_max = model.actuator_ctrlrange[:, 1].copy() if model.nu > 0 else np.zeros(0)
-        self.has_ctrl_limits = bool(np.any(model.actuator_ctrllimited)) if model.nu > 0 else False
+        self.ctrl_min = self.mjmodel.model.actuator_ctrlrange[:, 0].copy() if self.mjmodel.model.nu > 0 else np.zeros(0)
+        self.ctrl_max = self.mjmodel.model.actuator_ctrlrange[:, 1].copy() if self.mjmodel.model.nu > 0 else np.zeros(0)
+        self.has_ctrl_limits = bool(np.any(self.mjmodel.model.actuator_ctrllimited)) if self.mjmodel.model.nu > 0 else False
 
     def calc(self, data, x, u=None) -> None:
         if u is None:
