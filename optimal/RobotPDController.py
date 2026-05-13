@@ -10,45 +10,48 @@ except ImportError:  # Allows running this file directly as a script.
 
 class RobotPDController:
     def __init__(self, model: RobotMujocoModel, kp: float = 100.0, kd: float = 20.0):
-        self.model = model
+        self.model = model.model
+        self.data = model.data
         self.kp = kp
         self.kd = kd
         self.nu = model.model.nu
         self.q_indices = model.q_indices()
         self.v_indices = model.v_indices()
+        self.joint_names = model.actuated_joint_names
         self.nx = self.q_indices.size + self.v_indices.size
+        self.ctrl_min = self.model.actuator_ctrlrange[:, 0] if self.nu > 0 else np.zeros(0)
+        self.ctrl_max = self.model.actuator_ctrlrange[:, 1] if self.nu > 0 else np.zeros(0)
+        self.has_ctrl_limits = bool(np.any(self.model.actuator_ctrllimited)) if self.nu > 0 else False
 
-        self.joint_to_actuator = np.full(model.q_indices().size, -1, dtype=int)
-        for i in range(self.nu):
-            joint_id = int(model.model.actuator_trnid[i, 0])
-            if joint_id >= 0:
-                local_joint_idx = np.where(self.q_indices == model.model.jnt_qposadr[joint_id])[0]
-                if local_joint_idx.size > 0:
-                    self.joint_to_actuator[local_joint_idx[0]] = i
-                else:
-                    joint_name = mujoco.mj_id2name(model.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
-                    print(
-                        f"Warning: Actuator {i} is mapped to joint '{joint_name}' "
-                        "which is not in the q_indices list."
-                    )
-            else:
-                print(f"Warning: Actuator {i} is not mapped to any joint.")
+    def compute_control(self, x_start: np.ndarray, x_goal: np.ndarray, horizon: int) -> np.ndarray:
+        assert x_start.shape == (self.nx,)
+        assert x_goal.shape == (self.nx,)
 
-    def compute_control(self, x: np.ndarray, x_target: np.ndarray) -> np.ndarray:
-        x = np.asarray(x, dtype=float).reshape(self.nx)
-        x_target = np.asarray(x_target, dtype=float).reshape(self.nx)
+        q0 = x_start[: self.q_indices.size]
+        v0 = x_start[self.q_indices.size :]
+        q_target = x_goal[: self.q_indices.size]
+        v_target = x_goal[self.q_indices.size :]
+        warm_xs = [x_start.copy()]
+        warm_us = []
 
-        q = x[: self.q_indices.size]
-        v = x[self.q_indices.size :]
-        q_des = x_target[: self.q_indices.size]
-        v_des = x_target[self.q_indices.size :]
-        tau_local = self.kp * (q_des - q) + self.kd * (v_des - v)
+        for k in range(horizon):
+            alpha = (k + 1) / horizon
+            q_des = (1.0 - alpha) * q0 + alpha * q_target
+            q_curr = self.data.qpos[self.q_indices]
+            v_curr = self.data.qvel[self.v_indices]
+            tau_local = self.kp * (q_des - q_curr) + self.kd * (v_target - v_curr)
 
-        u = np.zeros(self.nu)
-        for local_idx, actuator_id in enumerate(self.joint_to_actuator):
-            if actuator_id >= 0:
-                u[actuator_id] = tau_local[local_idx]
-        return u
+            u = np.zeros(self.nu)
+            for local_idx, actuator_id in zip(self.q_indices, self.v_indices):
+                u[local_idx] = tau_local[actuator_id]
+            if self.has_ctrl_limits:
+                u = np.clip(u, self.ctrl_min, self.ctrl_max)
+            self.data.ctrl[:] = u
+            mujoco.mj_step(self.model, self.data)
+            warm_us.append(u.copy())
+            warm_xs.append(self.data.qpos.copy())
+
+        return warm_xs, warm_us
 
 
 if __name__ == "__main__":
