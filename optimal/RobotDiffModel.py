@@ -1,7 +1,7 @@
 import mujoco
 import numpy as np
 import crocoddyl
-from RobotMujocoModel import RobotMujocoModel
+from .RobotMujocoModel import RobotMujocoModel
 
 class RobotDiffActionModel(crocoddyl.DifferentialActionModelAbstract):
     def __init__(
@@ -18,9 +18,9 @@ class RobotDiffActionModel(crocoddyl.DifferentialActionModelAbstract):
         self.mj_data = mujoco.MjData(mjmodel.model)
         self.q_indices = mjmodel.q_indices()
         self.v_indices = mjmodel.v_indices()
-        self.q_nominal = mjmodel.joint_positions.copy()
-        self.v_nominal = np.zeros_like(self.q_nominal)
-        self.x_target = x_target.copy()
+        self.qpos_nominal = mjmodel.data.qpos.copy()
+        self.qvel_nominal = mjmodel.data.qvel.copy()
+        self.x_target = np.asarray(x_target, dtype=float).copy()
         self.nq = self.q_indices.size
         self.nv = self.v_indices.size
         self.w_q = w_q
@@ -42,13 +42,14 @@ class RobotDiffActionModel(crocoddyl.DifferentialActionModelAbstract):
         q = x[: self.nq]
         v = x[self.nq :]
 
-        self.mj_data.qpos[:] = self.q_nominal
-        self.mj_data.qvel[:] = self.v_nominal
+        # Reset the full state, then inject the reduced coordinates.
+        self.mj_data.qpos[:] = self.qpos_nominal
+        self.mj_data.qvel[:] = self.qvel_nominal
         self.mj_data.qpos[self.q_indices] = q
         self.mj_data.qvel[self.v_indices] = v
-        if self.model.nu > 0:
+        if self.nu > 0:
             self.mj_data.ctrl[:] = u
-        mujoco.mj_forward(self.model, self.mj_data)
+        mujoco.mj_forward(self.mjmodel.model, self.mj_data)
 
         vdot = self.mj_data.qacc[self.v_indices].copy()
         data.xout[:] = vdot

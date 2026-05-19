@@ -49,7 +49,7 @@ class RobotPDController:
             self.data.ctrl[:] = u
             mujoco.mj_step(self.model, self.data)
             warm_us.append(u.copy())
-            warm_xs.append(self.data.qpos.copy())
+            warm_xs.append(np.concatenate([self.data.qpos[self.q_indices], self.data.qvel[self.v_indices]]))
 
         return warm_xs, warm_us
 

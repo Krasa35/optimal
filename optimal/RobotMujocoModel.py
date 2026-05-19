@@ -91,6 +91,11 @@ class RobotMujocoModel:
         if not list_of_joints:
             list_of_joints = self.actuated_joint_names
         return np.array([self.model.jnt_dofadr[mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)] for joint_name in list_of_joints], dtype=int)
+    
+    def current_state(self) -> np.ndarray:
+        q_indices = self.q_indices()
+        v_indices = self.v_indices()
+        return np.concatenate([self.data.qpos[q_indices], self.data.qvel[v_indices]])
 
     def random_actuated_q(
         self,
