@@ -28,25 +28,30 @@ class RobotMujocoModel:
         return q
 
     @joint_positions.setter
-    def joint_positions(self, q: dict[str, float]) -> None:
+    def joint_positions(self, q) -> None:
+        if type(q) is list:
+            q = dict(zip(self.actuated_joint_names, q))
+        else:
+            if not isinstance(q, dict):
+                raise TypeError("Input must be a list or a dictionary")
         for joint_name, target_pos in q.items():
-            try:
-                # Find the ID of the joint
-                joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-                if joint_id != -1:
-                    # Find where this joint's data lives in the qpos array
-                    qpos_adr = self.model.jnt_qposadr[joint_id]
-                    
-                    # Update both the current position and the controller target
-                    self.data.qpos[qpos_adr] = target_pos
-                    
-                    # If you have actuators with the same name, set their targets too
-                    actuator_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, joint_name)
-                    if actuator_id != -1:
-                        self.data.ctrl[actuator_id] = target_pos
-                    mujoco.mj_forward(self.model, self.data) 
-            except Exception as e:
-                print(f"Error setting {joint_name}: {e}")
+                try:
+                    # Find the ID of the joint
+                    joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+                    if joint_id != -1:
+                        # Find where this joint's data lives in the qpos array
+                        qpos_adr = self.model.jnt_qposadr[joint_id]
+                        
+                        # Update both the current position and the controller target
+                        self.data.qpos[qpos_adr] = target_pos
+                        
+                        # If you have actuators with the same name, set their targets too
+                        actuator_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, joint_name)
+                        if actuator_id != -1:
+                            self.data.ctrl[actuator_id] = target_pos
+                        mujoco.mj_forward(self.model, self.data) 
+                except Exception as e:
+                    print(f"Error setting {joint_name}: {e}")
 
     @property
     def actuated_joint_positions(self) -> dict[str, float]:
@@ -101,9 +106,15 @@ class RobotMujocoModel:
         self,
         default_range: tuple[float, float] = (-np.pi, np.pi),
         seed: int | None = None,
+        ensure_feasible: bool = False,
+        max_tries: int = 200,
+        constraint_tol: float = 1e-2,
     ) -> dict[str, float]:
         rng = np.random.default_rng(seed)
-        q_random: dict[str, float] = {}
+        joint_names: list[str] = []
+        joint_ids: list[int] = []
+        qpos_addrs: list[int] = []
+        limits: list[tuple[float, float]] = []
         for joint_name in self.actuated_joint_names:
             joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
             if joint_id < 0:
@@ -114,8 +125,68 @@ class RobotMujocoModel:
             else:
                 low, high = default_range
 
-            q_random[joint_name] = float(rng.uniform(low, high))
-        return q_random
+            joint_names.append(joint_name)
+            joint_ids.append(joint_id)
+            qpos_addrs.append(int(self.model.jnt_qposadr[joint_id]))
+            limits.append((float(low), float(high)))
+
+        if not joint_names:
+            return {}
+
+        if not ensure_feasible:
+            return {
+                name: float(rng.uniform(low, high))
+                for name, (low, high) in zip(joint_names, limits)
+            }
+
+        # if not hasattr(mujoco, "mj_projectConstraints"):
+            # raise RuntimeError("mujoco.mj_projectConstraints is required for ensure_feasible=True.")
+
+        qpos_addrs_arr = np.asarray(qpos_addrs, dtype=int)
+        qpos_nominal = self.data.qpos.copy()
+        qvel_nominal = self.data.qvel.copy()
+        ctrl_nominal = self.data.ctrl.copy()
+        try:
+            for _ in range(max_tries):
+                q_sample = np.array(
+                    [rng.uniform(low, high) for (low, high) in limits],
+                    dtype=float,
+                )
+                self.data.qpos[:] = qpos_nominal
+                self.data.qvel[:] = qvel_nominal
+                self.data.ctrl[:] = ctrl_nominal
+                self.data.qpos[qpos_addrs_arr] = q_sample
+                mujoco.mj_forward(self.model, self.data)
+                mujoco.mj_projectConstraint(self.model, self.data)
+                mujoco.mj_forward(self.model, self.data)
+
+                if self.data.nefc > 0 and np.max(np.abs(self.data.efc_pos)) > constraint_tol:
+                    continue
+                if self.data.ncon > 0:
+                    continue
+
+                q_projected = self.data.qpos[qpos_addrs_arr].copy()
+                in_range = True
+                for (low, high), val in zip(limits, q_projected):
+                    if val < low - constraint_tol or val > high + constraint_tol:
+                        in_range = False
+                        break
+                if not in_range:
+                    continue
+
+                return {
+                    name: float(val)
+                    for name, val in zip(joint_names, q_projected)
+                }
+        finally:
+            self.data.qpos[:] = qpos_nominal
+            self.data.qvel[:] = qvel_nominal
+            self.data.ctrl[:] = ctrl_nominal
+            mujoco.mj_forward(self.model, self.data)
+
+        raise RuntimeError(
+            "Unable to sample a feasible actuated configuration within max_tries."
+        )
 
     def reset(self) -> None:
         self.data.qpos[:] = 0.0
@@ -129,7 +200,8 @@ class RobotMujocoModel:
             plt.imshow(renderer.render())
             plt.axis('off')
             plt.show()
-        return renderer.render()
+        else:
+            return renderer.render()
 
 if __name__ == "__main__":
     MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "UR5gripper_2_finger_KKI.xml"

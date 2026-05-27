@@ -144,12 +144,8 @@ def solve_ocp(model: mujoco.MjModel):
         model, q_indices, v_indices, q_nominal, v_nominal, state, x_target, w_q=1000.0, w_v=2.0, w_u=0.0
     )
 
-    running_model = crocoddyl.IntegratedActionModelEuler(
-        crocoddyl.DifferentialActionModelNumDiff(running_diff, False), DT
-    )
-    terminal_model = crocoddyl.IntegratedActionModelEuler(
-        crocoddyl.DifferentialActionModelNumDiff(terminal_diff, False), 0.0
-    )
+    running_model = crocoddyl.IntegratedActionModelEuler(running_diff, DT)
+    terminal_model = crocoddyl.IntegratedActionModelEuler(terminal_diff, 0.0)
 
     problem = crocoddyl.ShootingProblem(x0, [running_model] * HORIZON, terminal_model)
     solver = crocoddyl.SolverFDDP(problem)
@@ -191,12 +187,8 @@ def main():
         MujModel.model, q_indices, v_indices, q_nominal, v_nominal, state, x_target, w_q=1000.0, w_v=2.0, w_u=0.0
     )
 
-    running_model = crocoddyl.IntegratedActionModelEuler(
-        crocoddyl.DifferentialActionModelNumDiff(running_diff, False), DT
-    )
-    terminal_model = crocoddyl.IntegratedActionModelEuler(
-        crocoddyl.DifferentialActionModelNumDiff(terminal_diff, False), 0.0
-    )
+    running_model = crocoddyl.IntegratedActionModelEuler(running_diff, DT)
+    terminal_model = crocoddyl.IntegratedActionModelEuler(terminal_diff, 0.0)
 
     problem = crocoddyl.ShootingProblem(x0, [running_model] * HORIZON, terminal_model)
     solver = crocoddyl.SolverFDDP(problem)

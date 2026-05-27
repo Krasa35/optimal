@@ -12,6 +12,7 @@ class RobotDiffActionModel(crocoddyl.DifferentialActionModelAbstract):
         w_q: float = 1.0,
         w_v: float = 1.0,
         w_u: float = 1.0,
+        fd_eps: float = 1e-6,
     ) -> None:
         super().__init__(state, mjmodel.model.nu, 1)
         self.mjmodel = mjmodel
@@ -26,9 +27,14 @@ class RobotDiffActionModel(crocoddyl.DifferentialActionModelAbstract):
         self.w_q = w_q
         self.w_v = w_v
         self.w_u = w_u
+        self.fd_eps = fd_eps
         self.ctrl_min = self.mjmodel.model.actuator_ctrlrange[:, 0].copy() if self.mjmodel.model.nu > 0 else np.zeros(0)
         self.ctrl_max = self.mjmodel.model.actuator_ctrlrange[:, 1].copy() if self.mjmodel.model.nu > 0 else np.zeros(0)
         self.has_ctrl_limits = bool(np.any(self.mjmodel.model.actuator_ctrllimited)) if self.mjmodel.model.nu > 0 else False
+        
+        # Allocate temp data for finite-difference derivatives
+        self.mj_data_plus = mujoco.MjData(mjmodel.model)
+        self.mj_data_minus = mujoco.MjData(mjmodel.model)
 
     def calc(self, data, x, u=None) -> None:
         if u is None:
@@ -61,6 +67,3 @@ class RobotDiffActionModel(crocoddyl.DifferentialActionModelAbstract):
             + 0.5 * self.w_v * float(dv @ dv)
             + 0.5 * self.w_u * float(u @ u)
         )
-
-    def calcDiff(self, data, x, u=None) -> None:
-        pass

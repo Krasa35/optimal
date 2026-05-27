@@ -62,7 +62,8 @@ class RobotCrocoddylController():
             self.problem.x0 = x0
         # Solve the problem
         # self.solver.setCallbacks([crocoddyl.CallbackVerbose()])
-        self.solver.solve(init_xs, init_us, 100, False)
+        self.solver.th_stop = 1e-9
+        self.solver.solve(init_xs, init_us, 10, False)
         return self.solver.xs, self.solver.us
     
 
