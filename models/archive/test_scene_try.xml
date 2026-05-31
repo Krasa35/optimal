@@ -1,0 +1,14 @@
+
+<mujoco model="test_scene">
+  <compiler angle="radian" meshdir="mesh/visual/" texturedir="textures/" inertiafromgeom="true"/>
+  <option gravity="0 0 -9.81"/>
+  <include file="UR5_empty.xml"/>
+  <worldbody>
+    <light name="scene_light" pos="0 0 3"/>
+    <geom name="scene_floor" type="plane" size="5 5 0.1" rgba="0.9 0.9 0.9 1"/>
+    <body name="klocek" pos="0.5 0 0.1">
+      <freejoint/>
+      <geom type="box" size="0.05 0.05 0.05" mass="1.0"/>
+    </body>
+  </worldbody>
+</mujoco>

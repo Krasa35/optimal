@@ -5,7 +5,7 @@ import pinocchio
 import meshcat.geometry as g
 
 robot = example_robot_data.load("talos_arm")
-robot_model = robot.model
+robot_pin_model = robot.model
 
 DT = 1e-3
 T = 25
@@ -29,7 +29,7 @@ state = crocoddyl.StateMultibody(robot.model)
 goalTrackingCost = crocoddyl.CostModelResidual(
     state,
     crocoddyl.ResidualModelFrameTranslation(
-        state, robot_model.getFrameId("gripper_left_joint"), target
+        state, robot_pin_model.getFrameId("gripper_left_joint"), target
     ),
 )
 xRegCost = crocoddyl.CostModelResidual(state, crocoddyl.ResidualModelState(state))
@@ -80,13 +80,13 @@ ddp.solve()
 # Visualizing the solution in gepetto-viewer
 display.displayFromSolver(ddp)
 
-robot_data = robot_model.createData()
+robot_data = robot_pin_model.createData()
 xT = ddp.xs[-1]
-pinocchio.forwardKinematics(robot_model, robot_data, xT[: state.nq])
-pinocchio.updateFramePlacements(robot_model, robot_data)
+pinocchio.forwardKinematics(robot_pin_model, robot_data, xT[: state.nq])
+pinocchio.updateFramePlacements(robot_pin_model, robot_data)
 print(
     "Finally reached = ",
-    robot_data.oMf[robot_model.getFrameId("gripper_left_joint")].translation.T,
+    robot_data.oMf[robot_pin_model.getFrameId("gripper_left_joint")].translation.T,
 )
 
 
@@ -94,7 +94,7 @@ import numpy as np
 import example_robot_data
 
 talos_arm = example_robot_data.load("talos_arm")
-robot_model = talos_arm.model  # getting the Pinocchio model
+robot_pin_model = talos_arm.model  # getting the Pinocchio model
 
 # Defining a initial state
 q0 = np.array([0.173046, 1.0, -0.52366, 0.0, 0.0, 0.1, -0.005])
@@ -102,9 +102,9 @@ x0 = np.concatenate([q0, np.zeros(talos_arm.model.nv)])
 
 # Create the cost functions
 target = np.array([0.4, 0.0, 0.4])
-state = crocoddyl.StateMultibody(robot_model)
+state = crocoddyl.StateMultibody(robot_pin_model)
 frameTranslationResidual = crocoddyl.ResidualModelFrameTranslation(
-    state, robot_model.getFrameId("gripper_left_joint"), target
+    state, robot_pin_model.getFrameId("gripper_left_joint"), target
 )
 goalTrackingCost = crocoddyl.CostModelResidual(state, frameTranslationResidual)
 xRegCost = crocoddyl.CostModelResidual(state, crocoddyl.ResidualModelState(state))

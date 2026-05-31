@@ -20,7 +20,7 @@ Control Engineering / Automation Engineering
             iterations="100"
             tolerance="1e-10"
             impratio="10"
-            gravity="0 0 -9.81"/>
+            gravity="0 0 0"/>
     <!-- <size njmax="600" nconmax="150" nstack="300000"/> -->
 
     <default>
@@ -98,7 +98,7 @@ Control Engineering / Automation Engineering
         <exclude body1="forearm_link" body2="wrist_1_link"/>
         <exclude body1="wrist_1_link" body2="wrist_2_link"/>
         <exclude body1="wrist_2_link" body2="wrist_3_link"/>
-        <exclude body1="ee_link" body2="wrist_3_link"/>
+        <!-- <exclude body1="ee_link" body2="wrist_3_link"/> -->
     </contact>
 
 
@@ -108,9 +108,9 @@ Control Engineering / Automation Engineering
         <light name="light3" mode="targetbody" target="box_link" directional="true" pos="1 -1 3" />
         <!-- <light name="light3" mode="targetbody" target="box_link" directional="true" pos="1 1 3" /> -->
         <!--Camera parameters-->
-        <camera name="main1" mode="fixed" target="ee_link" pos="2 2 2.7" axisangle="2 2 -2 1"/>
-        <camera name="top_down" mode="fixed" target="ee_link" pos="0 -0.6 2.0" axisangle="2 2 2 0"/>
-        <camera name="side" mode="fixed" target="ee_link" pos="0.8 -0.6 1.0" quat="0.5 0.5 0.5 0.5"/>
+        <!-- <camera name="main1" mode="fixed" target="ee_link" pos="2 2 2.7" axisangle="2 2 -2 1"/> -->
+        <!-- <camera name="top_down" mode="fixed" target="ee_link" pos="0 -0.6 2.0" axisangle="2 2 2 0"/> -->
+        <!-- <camera name="side" mode="fixed" target="ee_link" pos="0.8 -0.6 1.0" quat="0.5 0.5 0.5 0.5"/> -->
         <!--Floor Property-->
         <geom name='floor' material="floor_mat" pos='0 0 0' size='2.5 2.5 0.1'  type='plane' />
 
@@ -151,11 +151,10 @@ Control Engineering / Automation Engineering
                                         <inertial pos="0 0 0" quat="0.5 0.5 -0.5 0.5" mass="0.1879" diaginertia="0.033822 0.0171365 0.0171365" />
                                         <joint name="wrist_3_joint" class="UR5e" pos="0 0 0" axis="0 1 0" limited="true" range="-3.14159 3.14159" />
                                         <geom type="mesh"  mesh="wrist3" material="ur5_mat"/>
+                                        <!--    
                                         <body name="ee_link" pos="0 0.0823 0" quat="0.707107 0 0 0.707107">
                                             <inertial pos="-0.01 0 0" mass="0.001" diaginertia="1.66667e-08 1.66667e-08 1.66667e-08" />
                                             <geom size="0.005 0.005 0.005" pos="-0.01 0 0" type="box" />
-                                            <!--GRIPPER-->
-                                             <!-- <joint name="ee_to_base" pos="0 0 0" axis="1 0 0" limited="true" range="0 0" /> -->
                                             <body name="robotiq_85_base_link" pos="0 0 0" quat="0.5 0.5 0.5 0.5 ">
                                                 <inertial pos="0.00021987 -2.3546e-10 0.030163"  quat="0.707058 0.00723369 0.00723345 0.707081" mass="0.30915" diaginertia="0.00030737 0.000289758 0.000199102" />
                                                 <geom type="mesh" rgba="0.1 0.1 0.1 1" friction="0.8 0.8 0.8" mesh="robotiq_85_base_link_coarse" />
@@ -184,6 +183,7 @@ Control Engineering / Automation Engineering
                                                 </body>
                                             </body>
                                         </body>
+                                        -->
                                     </body>
                                 </body>
                             </body>
