@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable
-
 import numpy as np
 import pinocchio as pin
 
@@ -12,66 +11,27 @@ class PDController:
         self,
         model: pin.Model,
         *,
-        controlled_joint_names: Iterable[str] | None = None,
         kp: float = 3.0,
         kd: float = 0.2,
         torque_limits: float | np.ndarray | None = None,
     ):
         self.model = model
         self.data = model.createData()
-        self.kp = float(kp)
-        self.kd = float(kd)
+        if len(kp) == 1:
+            self.kp = np.full(model.nq, float(kp), dtype=float)
+        else:
+            self.kp = np.asarray(kp, dtype=float)
+        if len(kd) == 1:
+            self.kd = np.full(model.nq, float(kd), dtype=float)
+        else:
+            self.kd = np.asarray(kd, dtype=float)
+        
         self.nq = model.nq
         self.nv = model.nv
         self.nx = self.nq + self.nv
-
-        self.controlled_v_indices = self._build_controlled_v_indices(controlled_joint_names)
-        self.nu = int(self.controlled_v_indices.size)
-        if self.nu == 0:
-            raise ValueError("No controlled DoFs selected.")
-
-        self.ctrl_min, self.ctrl_max, self.has_ctrl_limits = self._build_torque_limits(torque_limits)
-
-    def _build_controlled_v_indices(self, controlled_joint_names: Iterable[str] | None) -> np.ndarray:
-        if controlled_joint_names is None:
-            return np.arange(self.nv, dtype=int)
-
-        names = set(self.model.names.tolist())
-        v_indices: list[int] = []
-        for joint_name in controlled_joint_names:
-            if joint_name not in names:
-                raise ValueError(f"Joint '{joint_name}' is not present in the Pinocchio model.")
-            joint_id = self.model.getJointId(joint_name)
-            joint = self.model.joints[joint_id]
-            if joint.nv <= 0:
-                continue
-            v_indices.extend(range(joint.idx_v, joint.idx_v + joint.nv))
-
-        unique_sorted = np.array(sorted(set(v_indices)), dtype=int)
-        if unique_sorted.size == 0:
-            raise ValueError("controlled_joint_names does not include any movable joints.")
-        return unique_sorted
-
-    def _build_torque_limits(
-        self, torque_limits: float | np.ndarray | None
-    ) -> tuple[np.ndarray, np.ndarray, bool]:
-        if torque_limits is None:
-            zeros = np.zeros(self.nu, dtype=float)
-            return zeros, zeros, False
-
-        limits = np.asarray(torque_limits, dtype=float)
-        if limits.ndim == 0:
-            if limits < 0:
-                raise ValueError("torque_limits must be non-negative.")
-            max_abs = np.full(self.nu, float(limits), dtype=float)
-        elif limits.shape == (self.nu,):
-            if np.any(limits < 0):
-                raise ValueError("torque_limits must be non-negative.")
-            max_abs = limits
-        else:
-            raise ValueError(f"torque_limits must be scalar or shape ({self.nu},), got {limits.shape}.")
-
-        return -max_abs, max_abs, True
+        self.has_ctrl_limits = True if torque_limits is not None else False
+        self.ctrl_min = -torque_limits if torque_limits is not None else None
+        self.ctrl_max = torque_limits if torque_limits is not None else None
 
     def compute_control(
         self,
@@ -80,10 +40,15 @@ class PDController:
         horizon: int,
         control_dt: float = 1.0,
         control_noise_std: float = 0.0,
+        alpha: float = 0.0,
     ) -> tuple[list[np.ndarray], list[np.ndarray]]:
         x_start = np.asarray(x_start, dtype=float)
         x_goal = np.asarray(x_goal, dtype=float)
-
+    
+        if x_start.shape == (self.nq,):
+            x_start = np.concatenate([x_start, np.zeros(self.nv)])
+        if x_goal.shape == (self.nq,):
+            x_goal = np.concatenate([x_goal, np.zeros(self.nv)])
         if x_start.shape != (self.nx,):
             raise ValueError(f"x_start must have shape ({self.nx},), got {x_start.shape}.")
         if x_goal.shape != (self.nx,):
@@ -98,45 +63,38 @@ class PDController:
         q = x_start[: self.nq].copy()
         v = x_start[self.nq :].copy()
         q_target = x_goal[: self.nq]
+        q_start = x_start[: self.nq].copy()
         v_target = x_goal[self.nq :]
 
-        rng = np.random.default_rng()
-        warm_xs: list[np.ndarray] = [x_start.copy()]
-        warm_us: list[np.ndarray] = []
+        e_prev = q_target - q
+        xs = [x_start.copy()]
+        us = []
 
-        for _ in range(horizon):
-            q_err_tangent = pin.difference(self.model, q, q_target)
-            v_err = v_target - v
-
-            u = self.kp * q_err_tangent[self.controlled_v_indices] + self.kd * v_err[self.controlled_v_indices]
-            if control_noise_std > 0:
-                u += rng.normal(scale=control_noise_std, size=u.shape)
-            if self.has_ctrl_limits:
-                u = np.clip(u, self.ctrl_min, self.ctrl_max)
-
-            tau_full = np.zeros(self.nv, dtype=float)
-            tau_full[self.controlled_v_indices] = u
-
-            a = pin.aba(self.model, self.data, q, v, tau_full)
+        for step in range(horizon):
+            if alpha > 0.0:
+                _alpha = min(1.0, step / (horizon * alpha))
+                q_ref = q_start + _alpha * (q_target - q_start)
+                err = q_ref - q
+            else:
+                err = q_target - q
+            derr = (err - e_prev) / control_dt
+            e_prev = err
+            
+            # Obliczenie momentów
+            u = self.kp * err + self.kd * derr
+            g = pin.computeGeneralizedGravity(self.model, self.data, q)
+            tau = u + g
+            
+            # 3. NASYCENIE (TORQUE CLIPPING)
+            # Odcina wszystkie kosmiczne wartości do bezpiecznych limitów robota
+            tau = np.clip(tau, -self.ctrl_max, self.ctrl_max)
+            
+            # Krok wirtualnej fizyki Pinocchio
+            a = pin.aba(self.model, self.data, q, v, tau)
             v = v + control_dt * a
             q = pin.integrate(self.model, q, control_dt * v)
-
-            warm_us.append(u.copy())
-            warm_xs.append(np.concatenate([q.copy(), v.copy()]))
-
-        return warm_xs, warm_us
-
-
-# Backward-compatible name used in older scripts.
-RobotPDController = PDController
-
-
-if __name__ == "__main__":
-    MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "ur5e" / "ur5e.urdf"
-    pin_model = pin.buildModelFromUrdf(str(MODEL_PATH))
-    controller = PDController(pin_model)
-    x0 = np.zeros(pin_model.nq + pin_model.nv, dtype=float)
-    xg = x0.copy()
-    xg[: pin_model.nq] = 0.2
-    xs, us = controller.compute_control(x0, xg, horizon=10, control_dt=0.01)
-    print(f"Generated {len(xs)} states and {len(us)} controls.")
+            
+            us.append(tau.copy())
+            xs.append(np.concatenate([q.copy(), v.copy()]))
+            
+        return xs, us

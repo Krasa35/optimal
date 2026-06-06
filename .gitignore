@@ -4,3 +4,4 @@ misc/*.pdf
 typings
 *.egg-info
 .github
+examples/*.py
