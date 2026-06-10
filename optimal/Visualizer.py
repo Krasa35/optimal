@@ -35,7 +35,9 @@ class Visualizer:
                     viewer.sync()
                     time.sleep(dt)
                 input("Press Enter to continue...")
+                return vector
         elif mode == "control" and vector is not None:
+            x_pos = []
             with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
                 self._setup_camera(viewer)
                 for i in range(len(vector)):
@@ -43,4 +45,6 @@ class Visualizer:
                     mujoco.mj_step(self.model, self.data)
                     viewer.sync()
                     time.sleep(dt)
+                    x_pos.append(self.data.qpos.copy())
                 input("Press Enter to continue...")
+                return x_pos
