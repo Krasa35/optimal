@@ -13,7 +13,6 @@ class PDController:
         *,
         kp: float = 3.0,
         kd: float = 0.2,
-        torque_limits: float | np.ndarray | None = None,
     ):
         self.model = model
         self.data = model.createData()
@@ -29,9 +28,8 @@ class PDController:
         self.nq = model.nq
         self.nv = model.nv
         self.nx = self.nq + self.nv
-        self.has_ctrl_limits = True if torque_limits is not None else False
-        self.ctrl_min = -torque_limits if torque_limits is not None else None
-        self.ctrl_max = torque_limits if torque_limits is not None else None
+        self.ctrl_min = -model.effortLimit
+        self.ctrl_max = model.effortLimit
 
     def compute_control(
         self,
