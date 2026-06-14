@@ -78,16 +78,12 @@ class PDController:
             derr = (err - e_prev) / control_dt
             e_prev = err
             
-            # Obliczenie momentów
             u = self.kp * err + self.kd * derr
             g = pin.computeGeneralizedGravity(self.model, self.data, q)
             tau = u + g
             
-            # 3. NASYCENIE (TORQUE CLIPPING)
-            # Odcina wszystkie kosmiczne wartości do bezpiecznych limitów robota
             tau = np.clip(tau, -self.ctrl_max, self.ctrl_max)
             
-            # Krok wirtualnej fizyki Pinocchio
             a = pin.aba(self.model, self.data, q, v, tau)
             v = v + control_dt * a
             q = pin.integrate(self.model, q, control_dt * v)

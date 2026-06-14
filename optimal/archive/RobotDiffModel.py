@@ -1,7 +1,7 @@
 import mujoco
 import numpy as np
 import crocoddyl
-from .RobotMujocoModel import RobotMujocoModel
+from .RobotMujocoModel_old import RobotMujocoModel
 
 class RobotDiffActionModel(crocoddyl.DifferentialActionModelAbstract):
     def __init__(

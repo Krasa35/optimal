@@ -1,6 +1,6 @@
 import crocoddyl
 import numpy as np
-from .RobotMujocoModel import RobotMujocoModel
+from .RobotMujocoModel_old import RobotMujocoModel
 from .RobotDiffModel import RobotDiffActionModel
 
 class RobotCrocoddylController():

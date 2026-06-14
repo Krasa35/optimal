@@ -1,229 +1,245 @@
-from pathlib import Path
-import logging
-from pathlib import Path
-from xml.parsers.expat import model
-import mujoco
+import mujoco.viewer
+import time
 import numpy as np
 import matplotlib.pyplot as plt
+import pinocchio as pin
+import scipy.spatial.transform
 
 class RobotMujocoModel:
-    def __init__(self, model_path: str):
-        self.model = mujoco.MjModel.from_xml_path(str(model_path))
+    def __init__(self, path, list_of_joints=None, start_position=None):
+        self.model = mujoco.MjModel.from_xml_path(str(path))
         self.data = mujoco.MjData(self.model)
-        self.joint_names = self._joint_names()
+        if list_of_joints is None:
+            list_of_joints = self._actuated_joint_names()
+        assert type(list_of_joints) == list, "list_of_joints should be a list of joint names."
+        self.joint_names = list_of_joints
+        self.q_indices = self._q_indices(list_of_joints)
+        self.v_indices = self._v_indices(list_of_joints)
+        self.u_indices = self._u_indices(list_of_joints)
+        self.start_position = start_position if start_position is not None else np.zeros(len(self.q_indices))
+        self.set_joint_positions(self.start_position)
 
+        self.lookat=np.array([0.0, 0.0, 0.7])
+        self.distance=3.5
+        self.azimuth=90
+        self.elevation=-30
 
-        logging.info(f"Model loaded from {model_path}.")
-
-    def _joint_names(self) -> list[str]:
-        return [mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, i) for i in range(self.model.njnt)]
-
-    @property
-    def joint_positions(self) -> dict[str, float]:
-        q: dict[str, float] = {}
-        for joint_name in self.actuated_joint_names:
-            joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-            if joint_id >= 0:
-                q[joint_name] = self.data.qpos[self.model.jnt_qposadr[joint_id]]
-        return q
-
-    @joint_positions.setter
-    def joint_positions(self, q) -> None:
-        if type(q) is list:
-            q = dict(zip(self.actuated_joint_names, q))
-        else:
-            if not isinstance(q, dict):
-                raise TypeError("Input must be a list or a dictionary")
-        for joint_name, target_pos in q.items():
-                try:
-                    # Find the ID of the joint
-                    joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-                    if joint_id != -1:
-                        # Find where this joint's data lives in the qpos array
-                        qpos_adr = self.model.jnt_qposadr[joint_id]
-                        
-                        # Update both the current position and the controller target
-                        self.data.qpos[qpos_adr] = target_pos
-                        
-                        # If you have actuators with the same name, set their targets too
-                        actuator_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, joint_name)
-                        if actuator_id != -1:
-                            self.data.ctrl[actuator_id] = target_pos
-                        mujoco.mj_forward(self.model, self.data) 
-                except Exception as e:
-                    print(f"Error setting {joint_name}: {e}")
-
-    @property
-    def actuated_joint_positions(self) -> dict[str, float]:
-        q: dict[str, float] = {}
-        for joint_name in self.actuated_joint_names:
-            joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-            if joint_id >= 0:
-                q[joint_name] = self.data.qpos[self.model.jnt_qposadr[joint_id]]
-        return q
-
-    @property
-    def actuated_joint_names(self) -> list[str]:
-        actuated_joint_names = []
-        for i in range(self.model.nu):
-            joint_id = int(self.model.actuator_trnid[i, 0])
-            if joint_id < 0:
-                continue
-            joint_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
-            if joint_name is not None:
-                actuated_joint_names.append(joint_name)
-        return actuated_joint_names
+    def _actuated_joint_names(self) -> list[str]:
+        return [
+            mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, self.model.actuator_trnid[i, 0])
+            for i in range(self.model.nu)
+            if self.model.actuator_trnid[i, 0] != -1
+        ]
     
-    @actuated_joint_names.setter
-    def actuated_joint_names(self, joint_names: list[str]) -> None:
-        for i in range(self.model.nu):
-            if i < len(joint_names):
-                joint_name = joint_names[i]
-                joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-                if joint_id != -1:
-                    self.model.actuator_trnid[i, 0] = joint_id
-                else:
-                    print(f"Warning: Joint '{joint_name}' not found in the model.")
-            else:
-                self.model.actuator_trnid[i, 0] = -1
-
-    def q_indices(self, list_of_joints: list[str]=[]) -> np.ndarray:
-        if not list_of_joints:
-            list_of_joints = self.actuated_joint_names  
+    def _q_indices(self, list_of_joints=None) -> np.ndarray:
+        if list_of_joints is None:
+            list_of_joints = self.joint_names
         return np.array([self.model.jnt_qposadr[mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)] for joint_name in list_of_joints], dtype=int)
     
-    def v_indices(self, list_of_joints: list[str]=[]) -> np.ndarray:
-        if not list_of_joints:
-            list_of_joints = self.actuated_joint_names
+    def _v_indices(self, list_of_joints=None) -> np.ndarray:
+        if list_of_joints is None:
+            list_of_joints = self.joint_names
         return np.array([self.model.jnt_dofadr[mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)] for joint_name in list_of_joints], dtype=int)
-    
-    def current_state(self) -> np.ndarray:
-        q_indices = self.q_indices()
-        v_indices = self.v_indices()
-        return np.concatenate([self.data.qpos[q_indices], self.data.qvel[v_indices]])
 
-    def random_actuated_q(
-        self,
-        default_range: tuple[float, float] = (-np.pi, np.pi),
-        seed: int | None = None,
-        ensure_feasible: bool = False,
-        max_tries: int = 200,
-        constraint_tol: float = 1e-2,
-    ) -> dict[str, float]:
-        rng = np.random.default_rng(seed)
-        joint_names: list[str] = []
-        joint_ids: list[int] = []
-        qpos_addrs: list[int] = []
-        limits: list[tuple[float, float]] = []
-        for joint_name in self.actuated_joint_names:
-            joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
-            if joint_id < 0:
-                continue
+    def _u_indices(self, list_of_joints=None) -> np.ndarray:
+        if list_of_joints is None:
+            list_of_joints = self.joint_names
+        joint_to_actuator = {
+            self.model.actuator_trnid[i, 0]: i
+            for i in range(self.model.nu)
+            if self.model.actuator_trnid[i, 0] != -1
+        }
+        return np.array([
+            joint_to_actuator[mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)]
+            for name in list_of_joints
+        ], dtype=int)
 
-            if int(self.model.jnt_limited[joint_id]) == 1:
-                low, high = self.model.jnt_range[joint_id]
-            else:
-                low, high = default_range
+    def _setup_camera(self, viewer):
+        viewer.cam.lookat[:] = self.lookat   # look-at point
+        viewer.cam.distance = self.distance             # distance from lookat
+        viewer.cam.azimuth = self.azimuth               # horizontal angle (degrees)
+        viewer.cam.elevation = self.elevation            # vertical angle (degrees)
 
-            joint_names.append(joint_name)
-            joint_ids.append(joint_id)
-            qpos_addrs.append(int(self.model.jnt_qposadr[joint_id]))
-            limits.append((float(low), float(high)))
+    def get_obj_payload(self, obj_name):
+        obj_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, obj_name)
+        if obj_id == -1:
+            raise ValueError(f"Object '{obj_name}' not found in the model. Check if the name is correct and exists in your Mujoco model.")
+        # Read inertial properties from MuJoCo
+        mj_mass    = self.model.body_mass[obj_id]                   # scalar [kg]
+        mj_com     = self.model.body_ipos[obj_id].copy()            # CoM in body frame [m]
+        mj_diag_I  = self.model.body_inertia[obj_id].copy()        # principal moments [kg·m²]
+        mj_iquat   = self.model.body_iquat[obj_id].copy()           # (w,x,y,z) quaternion of inertia frame
 
-        if not joint_names:
-            return {}
+        w, x, y, z = mj_iquat
+        R = scipy.spatial.transform.Rotation.from_quat([x, y, z, w]).as_matrix()
 
-        if not ensure_feasible:
-            return {
-                name: float(rng.uniform(low, high))
-                for name, (low, high) in zip(joint_names, limits)
-            }
-
-        # if not hasattr(mujoco, "mj_projectConstraints"):
-            # raise RuntimeError("mujoco.mj_projectConstraints is required for ensure_feasible=True.")
-
-        qpos_addrs_arr = np.asarray(qpos_addrs, dtype=int)
-        qpos_nominal = self.data.qpos.copy()
-        qvel_nominal = self.data.qvel.copy()
-        ctrl_nominal = self.data.ctrl.copy()
-        try:
-            for _ in range(max_tries):
-                q_sample = np.array(
-                    [rng.uniform(low, high) for (low, high) in limits],
-                    dtype=float,
-                )
-                self.data.qpos[:] = qpos_nominal
-                self.data.qvel[:] = qvel_nominal
-                self.data.ctrl[:] = ctrl_nominal
-                self.data.qpos[qpos_addrs_arr] = q_sample
-                mujoco.mj_forward(self.model, self.data)
-                mujoco.mj_projectConstraint(self.model, self.data)
-                mujoco.mj_forward(self.model, self.data)
-
-                if self.data.nefc > 0 and np.max(np.abs(self.data.efc_pos)) > constraint_tol:
-                    continue
-                if self.data.ncon > 0:
-                    continue
-
-                q_projected = self.data.qpos[qpos_addrs_arr].copy()
-                in_range = True
-                for (low, high), val in zip(limits, q_projected):
-                    if val < low - constraint_tol or val > high + constraint_tol:
-                        in_range = False
-                        break
-                if not in_range:
-                    continue
-
-                return {
-                    name: float(val)
-                    for name, val in zip(joint_names, q_projected)
-                }
-        finally:
-            self.data.qpos[:] = qpos_nominal
-            self.data.qvel[:] = qvel_nominal
-            self.data.ctrl[:] = ctrl_nominal
-            mujoco.mj_forward(self.model, self.data)
-
-        raise RuntimeError(
-            "Unable to sample a feasible actuated configuration within max_tries."
-        )
+        I_full = R @ np.diag(mj_diag_I) @ R.T
+        return pin.Inertia(mj_mass, mj_com, I_full)
 
     def reset(self) -> None:
-        self.data.qpos[:] = 0.0
-        self.data.ctrl[:] = 0.0
+        self.data.qpos[self.q_indices] = self.start_position
+        self.data.qvel[self.v_indices] = 0.0
+        self.data.ctrl[self.u_indices] = 0.0
         mujoco.mj_forward(self.model, self.data) 
+
+    def current_state(self) -> np.ndarray:
+        return np.concatenate([self.data.qpos[self.q_indices], self.data.qvel[self.v_indices]])
+
+    def current_joint_positions(self) -> np.ndarray:
+        return self.data.qpos[self.q_indices]
+    
+    def current_joint_velocities(self) -> np.ndarray:
+        return self.data.qvel[self.v_indices]
+
+    def set_joint_positions(self, q: np.ndarray) -> None:
+        if len(q) != len(self.q_indices):
+            raise ValueError(f"Input q must have length {len(self.q_indices)}, but got {len(q)}.")
+        self.data.qpos[self.q_indices] = q
+        mujoco.mj_forward(self.model, self.data)
 
     def snapshot(self, plot: bool = False) -> np.ndarray:
         renderer = mujoco.Renderer(self.model, height=480, width=640)
         renderer.update_scene(self.data)
-        if plot:
-            plt.imshow(renderer.render())
-            plt.axis('off')
-            plt.show()
+        plt.imshow(renderer.render())
+        plt.axis('off')
+        plt.show()
+
+    def setup_camera(self, lookat=[0, 0, 0.7], distance=3.5, azimuth=180, elevation=-40):
+        self.lookat = lookat
+        self.distance = distance
+        self.azimuth = azimuth
+        self.elevation = elevation
+
+    def visualize(self, mode, xs=None, us=None, dt=0.01, hold=True, kp=None, kd=None):
+        '''
+        Visualize the trajectory in MuJoCo viewer.
+        Args:
+            mode (str): "position" or "control".
+            xs: desired state trajectory for feedforward+feedback correction (optional,
+                only used in "control" mode). Each element should be [q_des, v_des] of
+                length >= 2*nu. When provided, a PD correction term is added to each u:
+                  u = u_ff + kp*(q_des - q) + kd*(v_des - v)
+            us: desired control trajectory for feedforward+feedback correction (optional,
+                only used in "control" mode). Each element should be [u_ff] of
+                length >= nu. When provided, a PD correction term is added to each u:
+                  u = u_ff + kp*(q_des - q) + kd*(v_des - v)
+            kp, kd: PD gains (np.ndarray of length nu). Required when xs is provided.
+        '''
+        x_real = []
+        u_real = []
+        if mode == "position" and xs is not None:
+            with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
+                self._setup_camera(viewer)
+                for i in range(len(xs)):
+                    self.data.qpos[self.q_indices] = xs[i][:len(self.q_indices)]
+                    mujoco.mj_forward(self.model, self.data)
+                    viewer.sync()
+                    time.sleep(dt)
+                    x_real.append(np.concatenate([
+                        self.data.qpos[self.q_indices],
+                        self.data.qvel[self.v_indices],
+                    ]))
+                    u_real.append(self.data.ctrl[self.u_indices].copy())
+                if hold:
+                    input("Press Enter to continue...")
+                return x_real, u_real
+        elif mode == "control" and us is not None:
+            use_feedback = xs is not None and kp is not None and kd is not None
+            with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
+                self._setup_camera(viewer)
+                for i in range(len(us)):
+                    u = np.array(us[i], dtype=float)
+                    if use_feedback:
+                        nq = len(self.q_indices)
+                        x_des = np.asarray(xs[i])
+                        q_des = x_des[:nq]
+                        v_des = x_des[nq:2*nq]
+                        q = self.data.qpos[self.q_indices]
+                        v = self.data.qvel[self.v_indices]
+                        u = u + kp * (q_des - q) + kd * (v_des - v)
+                        u = np.clip(u, self.model.actuator_ctrlrange[self.u_indices, 0], self.model.actuator_ctrlrange[self.u_indices, 1])
+                    self.data.ctrl[self.u_indices] = u
+                    mujoco.mj_step(self.model, self.data)
+                    viewer.sync()
+                    time.sleep(dt)
+                    x_real.append(np.concatenate([
+                        self.data.qpos[self.q_indices],
+                        self.data.qvel[self.v_indices],
+                    ]))
+                    u_real.append(self.data.ctrl[self.u_indices].copy())
+                if hold:
+                    input("Press Enter to continue...")
+                return x_real, u_real
+
+    def plot_controls(self, controls, dt=None):
+        '''
+        Plot the control trajectory using matplotlib.
+        Args:
+            controls (np.ndarray): The control trajectory of shape (T, nu).
+        '''
+        controls = np.asarray(controls)
+        plt.figure(figsize=(10, 6))
+        if dt is not None:
+            time = np.arange(len(controls)) * dt
+            plt.xlabel('Time (s)')
         else:
-            return renderer.render()
+            time = np.arange(len(controls))
+            plt.xlabel('Time step')
+        for i in range(controls.shape[1]):
+            plt.plot(time, controls[:, i], label=f'Joint {i + 1}')
+        plt.ylabel('Control value')
+        plt.title('Control Trajectory')
+        plt.legend()
+        plt.grid()
+        plt.show()
 
-if __name__ == "__main__":
-    MODEL_PATH = Path(__file__).resolve().parent.parent / "models" / "UR5gripper_2_finger_KKI.xml"
-    model = RobotMujocoModel(MODEL_PATH)
-    print("Joint names:", model.joint_names)
-    print("Initial joint positions:", model.joint_positions)
-    print("Actuated joint names:", model.actuated_joint_names)
-    print("Initial q indices:", model.q_indices())
-    print("Initial v indices:", model.v_indices())
-    model.actuated_joint_names = model.joint_names[:4]  # Assuming the first 4 joints are actuated
-    print("Updated actuated joint names:", model.actuated_joint_names)
-    print("Updated q indices:", model.q_indices())
-    print("Updated v indices:", model.v_indices())
+    def plot_error(self, x_pos, q_target, dt=None, segment_lengths=None):
+        '''
+        Plot configuration error over time.
+        Args:
+            x_pos: trajectory as returned by visualize() — rows are [q(nq), v(nq)].
+            q_target: single target np.ndarray OR a list of targets (one per path segment).
+            dt: timestep in seconds. If None, x-axis is step index.
+            segment_lengths: list of int, number of steps per segment. Required when
+                             q_target is a list. If omitted with a list, assumes equal segments.
+        '''
+        x_pos = np.array(x_pos)
+        T = len(x_pos)
 
-    # Example of setting joint positions
-    target_positions = {
-        "shoulder_pan_joint": 0.5,
-        "shoulder_lift_joint": -0.5,
-        "elbow_joint": 0.5,
-        "wrist_1_joint": -0.5,
-        "wrist_2_joint": 0.5,
-        "wrist_3_joint": -0.5
-    }
-    model.joint_positions = target_positions
-    print("Updated joint positions:", model.joint_positions)
+        if isinstance(q_target, (list, tuple)) and not isinstance(q_target[0], (int, float)):
+            # multi-segment: build per-timestep target array
+            targets = [np.asarray(q) for q in q_target]
+            nq = len(targets[0])
+            if segment_lengths is None:
+                seg_len = T // len(targets)
+                segment_lengths = [seg_len] * len(targets)
+            q_target_per_step = np.concatenate([
+                np.tile(t, (n, 1)) for t, n in zip(targets, segment_lengths)
+            ])[:T]
+        else:
+            nq = len(q_target)
+            q_target_per_step = np.tile(np.asarray(q_target), (T, 1))
+
+        error = np.linalg.norm((x_pos[:, :nq] - q_target_per_step) * 180 / np.pi, axis=1)
+
+        plt.figure(figsize=(10, 6))
+        if dt is not None:
+            t_axis = np.arange(T) * dt
+            plt.plot(t_axis, error)
+            plt.xlabel('Time (s)')
+            # draw vertical lines at segment boundaries
+            if isinstance(q_target, (list, tuple)) and not isinstance(q_target[0], (int, float)):
+                cumulative = np.cumsum(segment_lengths[:-1]) * dt
+                for t_sep in cumulative:
+                    plt.axvline(x=t_sep, color='gray', linestyle='--', linewidth=0.8)
+        else:
+            plt.plot(error)
+            plt.xlabel('Time step')
+            if isinstance(q_target, (list, tuple)) and not isinstance(q_target[0], (int, float)):
+                cumulative = np.cumsum(segment_lengths[:-1])
+                for t_sep in cumulative:
+                    plt.axvline(x=t_sep, color='gray', linestyle='--', linewidth=0.8)
+        plt.ylabel('Configuration Error (degrees)')
+        plt.title('Configuration Error Over Time')
+        plt.grid()
+        plt.show()
