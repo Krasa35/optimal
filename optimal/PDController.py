@@ -13,6 +13,7 @@ class PDController:
         *,
         kp: float = 3.0,
         kd: float = 0.2,
+        alpha: float = 0.0,
     ):
         self.model = model
         self.data = model.createData()
@@ -30,6 +31,7 @@ class PDController:
         self.nx = self.nq + self.nv
         self.ctrl_min = -model.effortLimit
         self.ctrl_max = model.effortLimit
+        self.alpha = float(alpha)
 
     def compute_control(
         self,
@@ -67,6 +69,8 @@ class PDController:
         e_prev = q_target - q
         xs = [x_start.copy()]
         us = []
+        if alpha == 0.0:
+            alpha = self.alpha
 
         for step in range(horizon):
             if alpha > 0.0:

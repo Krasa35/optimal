@@ -76,3 +76,36 @@ def peak_power(us: np.ndarray, xs: np.ndarray, plot: bool = False) -> float:
         plt.grid()
         plt.show()
     return float(np.max(power_per_step))
+
+def terminal_error(q_final: np.ndarray, q_target: np.ndarray) -> float:
+    """
+    Distance from final position to target.
+        error = ||q_final - q_target||
+    Args:
+        q_final: (nu,) final joint positions.
+        q_target: (nu,) target joint positions.
+    Returns:
+        Scalar terminal error [rad].
+    """
+    return float(np.linalg.norm(q_final - q_target))
+
+def torque_jerk(us: np.ndarray, plot: bool = False) -> float:
+    """
+    Sum of squared changes in torque — a smoothness metric.
+        jerk = ∫ Σ (dτ_i/dt)² dt
+    Args:
+        us: (T, nu) array of torques.
+        plot: whether to plot the torque jerk over time.
+    Returns:
+        Scalar torque jerk [N²m²/s].
+    """
+    us = np.asarray(us)
+    jerk_per_step = np.sum(np.diff(us, axis=0) ** 2, axis=1)
+    if plot == True:
+        plt.plot(jerk_per_step)
+        plt.xlabel("Timestep")
+        plt.ylabel("Torque jerk increment (N²m²/s)")
+        plt.title("Torque jerk per timestep")
+        plt.grid()
+        plt.show()
+    return float(np.sum(jerk_per_step))
