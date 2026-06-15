@@ -188,24 +188,59 @@ class RobotMujocoModel:
                     plt.show()
                 return x_real, u_real
             
-    def mpc_visualize(self, path, compute_control : callable, segment_lengths=None, dt=0.01, hold=True):
+    def mpc_visualize(self, path, compute_control : callable, segment_lengths=None, dt=0.01, hold=True, step=1, zoh=True):
+        """
+        Args:
+            step: number of sim steps between OCP re-solves.
+            zoh:  True  (default) → Zero-Order Hold: apply u_computed[0] for ALL `step`
+                          sim steps between re-solves.  Use when DT_ocp = step * sim_dt.
+                          Prevents chattering from bang-bang OCP plan oscillations.
+                  False → plan-following: apply u_computed[0], [1], … sequentially.
+                          Only correct when DT_ocp == sim_dt.
+        """
         if compute_control is None:
             raise ValueError("compute_control function must be provided for MPC mode.")
         with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
             self._setup_camera(viewer)
             x_real = []
             u_real = []
-            v_start = np.zeros(len(self.v_indices))
+            warm_xs, warm_us = None, None
+            x_computed = None
+            u_computed = np.zeros((1, len(self.u_indices)))
             for i in range(len(path) - 1):
                 for _ in range(segment_lengths[i]):
-                    if _ % 2 == 0:  # Update viewer every 10 steps to reduce overhead
+                    u_idx = _ % step
+                    if u_idx == 0:
                         q_current = self.data.qpos[self.q_indices].copy()
-                        x_current = np.concatenate([q_current, v_start])
+                        v_current = self.data.qvel[self.v_indices].copy()
+                        x_current = np.concatenate([q_current, v_current])
                         x_des = np.concatenate([np.asarray(path[i+1]), np.zeros(len(self.v_indices))])
-                        _, u_computed = compute_control(x_current, x_des)
+                        # Shifted warm-start: drop first `step` nodes, pad tail, prepend x_current.
+                        # warm_xs needs T+1 rows; warm_us needs T rows (Crocoddyl ShootingProblem).
+                        if x_computed is not None and len(u_computed) >= step:
+                            warm_xs = np.concatenate([
+                                [x_current],
+                                x_computed[step:],
+                                np.tile(x_computed[-1:], (step, 1)),
+                            ])
+                            warm_us = np.concatenate([
+                                u_computed[step:],
+                                np.tile(u_computed[-1:], (step, 1)),
+                            ])
+                        else:
+                            warm_xs, warm_us = None, None
+                        x_computed, u_computed = compute_control(warm_xs, warm_us, x_current, x_des)
                         u_computed = np.asarray(u_computed, dtype=float)
                         u_computed = np.clip(u_computed, self.model.actuator_ctrlrange[self.u_indices, 0], self.model.actuator_ctrlrange[self.u_indices, 1])
-                    self.data.ctrl[self.u_indices] = u_computed[0]
+                    if zoh:
+                        # ZOH: hold u[0] for the whole interval.
+                        # Prevents chattering: consecutive OCP controls u[k] can flip sign
+                        # at small DT because the linearised dynamics alternate direction.
+                        u_apply = u_computed[0]
+                    else:
+                        # Plan-following: only use when DT_ocp == sim_dt.
+                        u_apply = u_computed[min(u_idx, len(u_computed) - 1)]
+                    self.data.ctrl[self.u_indices] = u_apply
                     mujoco.mj_step(self.model, self.data)
                     viewer.sync()
                     time.sleep(dt)
@@ -214,7 +249,6 @@ class RobotMujocoModel:
                         self.data.qvel[self.v_indices],
                     ]))
                     u_real.append(self.data.ctrl[self.u_indices].copy())
-                    v_start = self.data.qvel[self.v_indices].copy()
             if hold:
                 input("Press Enter to continue...")
             return x_real, u_real
