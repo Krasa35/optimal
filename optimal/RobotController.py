@@ -141,13 +141,11 @@ class RobotController:
             return xs[1:], us
         elif option == "crocoddyl":
             if warm_xs is None or warm_us is None:
-                print("No warm start provided; computing warm start using PD control.")
                 warm_xs, warm_us = self._calc_pdcontrol(x_start, x_goal, T, DT, **kwargs)
             xs, us = self._calc_crocoddylcontrol_basicjoint(x_start, x_goal, T, DT, warm_xs=warm_xs, warm_us=warm_us, **kwargs)
             return xs[1:], us
         elif option == "crocoddyl_advanced":
             if warm_xs is None or warm_us is None:
-                print("No warm start provided; computing warm start using PD control.")
                 warm_xs, warm_us = self._calc_pdcontrol(x_start, x_goal, T, DT, **kwargs)
             xs, us = self._calc_crocoddylcontrol_advancedjoint(x_start, x_goal, T, DT, warm_xs=warm_xs, warm_us=warm_us, **kwargs)
             return xs[1:], us

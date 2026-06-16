@@ -110,6 +110,47 @@ class RobotMujocoModel:
         self.azimuth = azimuth
         self.elevation = elevation
 
+    def _simulate_control(self, us, xs=None, kp=None, kd=None, use_feedback=False):
+        u_computed = np.array(us, dtype=float)
+        if use_feedback:  # Apply feedback every 2 steps to reduce computation
+            nq = len(self.q_indices)
+            x_des = np.array(xs, dtype=float) 
+            q_des = x_des[:nq]
+            v_des = x_des[nq:2*nq]
+            q = self.data.qpos[self.q_indices]
+            v = self.data.qvel[self.v_indices]
+            correction = kp * (q_des - q) + kd * (v_des - v)
+            u = u_computed + correction
+            u = np.clip(u, self.model.actuator_ctrlrange[self.u_indices, 0], self.model.actuator_ctrlrange[self.u_indices, 1])
+        else:
+            u = u_computed
+        self.data.ctrl[self.u_indices] = u
+        mujoco.mj_step(self.model, self.data)
+        x_real = np.concatenate([self.data.qpos[self.q_indices], self.data.qvel[self.v_indices]])
+        return x_real, u
+    
+    def simulate_control(self, us, xs=None, kp=None, kd=None):
+        x_real, u_real = [], []
+        use_feedback = xs is not None and kp is not None and kd is not None
+        for i in range(len(us)):
+            x, u = self._simulate_control(us[i], xs=xs[i] if xs is not None else None, kp=kp, kd=kd, use_feedback=use_feedback)
+            x_real.append(x)
+            u_real.append(u)
+        return np.array(x_real), np.array(u_real)
+    
+    def plot_feedback_part(self, u_real, us):
+        closed_loop_part = (np.array(u_real) - np.array(us)) / np.array(us) * 100
+        plt.figure(figsize=(10, 6))
+        for i in range(closed_loop_part.shape[1]):
+            plt.plot(closed_loop_part[:, i], label=f'Joint {i + 1}')
+        plt.xlabel('Time step')
+        plt.ylabel('Feedback contribution (%)')
+        plt.title('Feedback Contribution to Control')
+        plt.ylim(0, 100)
+        plt.legend()
+        plt.grid()
+        plt.show()
+
     def visualize(self, mode, xs=None, us=None, dt=0.01, hold=True, kp=None, kd=None, plot=False):
         '''
         Visualize the trajectory in MuJoCo viewer.
@@ -131,62 +172,26 @@ class RobotMujocoModel:
             with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
                 self._setup_camera(viewer)
                 for i in range(len(xs)):
-                    self.data.qpos[self.q_indices] = xs[i][:len(self.q_indices)]
-                    mujoco.mj_forward(self.model, self.data)
+                    self.set_joint_positions(xs[i][:len(self.q_indices)])
                     viewer.sync()
                     time.sleep(dt)
-                    x_real.append(np.concatenate([
-                        self.data.qpos[self.q_indices],
-                        self.data.qvel[self.v_indices],
-                    ]))
-                    u_real.append(self.data.ctrl[self.u_indices].copy())
-                if hold:
-                    input("Press Enter to continue...")
-                return x_real, u_real
+                    x_real.append(xs)
+                    u_real.append(np.zeros(len(self.u_indices)))
         elif mode == "control" and us is not None:
-            use_feedback = xs is not None and kp is not None and kd is not None
             with mujoco.viewer.launch_passive(self.model, self.data) as viewer:
+                use_feedback = xs is not None and kp is not None and kd is not None
                 self._setup_camera(viewer)
-                closed_loop_part = []
                 for i in range(len(us)):
-                    u_computed = np.array(us[i], dtype=float)
-                    if use_feedback:  # Apply feedback every 2 steps to reduce computation
-                        nq = len(self.q_indices)
-                        x_des = np.asarray(xs[i])
-                        q_des = x_des[:nq]
-                        v_des = x_des[nq:2*nq]
-                        q = self.data.qpos[self.q_indices]
-                        v = self.data.qvel[self.v_indices]
-                        correction = kp * (q_des - q) + kd * (v_des - v)
-                        u = u_computed + correction
-                        u = np.clip(u, self.model.actuator_ctrlrange[self.u_indices, 0], self.model.actuator_ctrlrange[self.u_indices, 1])
-                        closed_loop_part.append(100 * np.abs(u - u_computed) / (np.abs(u_computed) + 1e-6))  # feedback contribution in percentage
-                    else:
-                        u = u_computed
-                    self.data.ctrl[self.u_indices] = u
-                    mujoco.mj_step(self.model, self.data)
+                    x, u = self._simulate_control(us[i], xs=xs[i] if xs is not None else None, kp=kp, kd=kd, use_feedback=use_feedback)
                     viewer.sync()
                     time.sleep(dt)
-                    x_real.append(np.concatenate([
-                        self.data.qpos[self.q_indices],
-                        self.data.qvel[self.v_indices],
-                    ]))
-                    u_real.append(self.data.ctrl[self.u_indices].copy())
-                if hold:
-                    input("Press Enter to continue...")
-                if plot and use_feedback:
-                    closed_loop_part = np.array(closed_loop_part)
-                    plt.figure(figsize=(10, 6))
-                    for i in range(closed_loop_part.shape[1]):
-                        plt.plot(closed_loop_part[:, i], label=f'Joint {i + 1}')
-                    plt.xlabel('Time step')
-                    plt.ylabel('Feedback contribution (%)')
-                    plt.title('Feedback Contribution to Control')
-                    plt.ylim(0, 100)
-                    plt.legend()
-                    plt.grid()
-                    plt.show()
-                return x_real, u_real
+                    x_real.append(x)
+                    u_real.append(u)
+                if plot:
+                    self.plot_feedback_part(u_real, us)
+        if hold:
+            input("Press Enter to continue...")
+        return x_real, u_real
             
     def mpc_visualize(self, path, compute_control : callable, segment_lengths=None, dt=0.01, hold=True, step=1, zoh=True):
         """
