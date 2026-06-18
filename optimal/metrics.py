@@ -87,7 +87,7 @@ def terminal_error(q_final: np.ndarray, q_target: np.ndarray) -> float:
     Returns:
         Scalar terminal error [rad].
     """
-    return float(np.linalg.norm(q_final - q_target))
+    return float(np.linalg.norm(q_final[:3] - q_target[:3]) + 0.1*np.linalg.norm(q_final[3:] - q_target[3:]))
 
 def torque_jerk(us: np.ndarray, plot: bool = False) -> float:
     """

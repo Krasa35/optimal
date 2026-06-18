@@ -68,18 +68,27 @@ class RobotController:
         state = crocoddyl.StateMultibody(model)
         x_start = np.asarray(x_start, dtype=float)
         x_goal  = np.asarray(x_goal,  dtype=float)
-        q_goal  = x_goal[:model.nq]
 
-        # 1. Goal Tracking
-        goalTrackingCost = crocoddyl.CostModelResidual(
-            state, crocoddyl.ResidualModelState(state, x_goal))
+        # 1. Goal Tracking — xref must be full state (nq+nv). Use weighted activations
+        #    to track body joints and wrist joints separately with different weights.
+        stateResidual = crocoddyl.ResidualModelState(state, x_goal)
+
+        # Body: track first 3 joints only (zero out wrist + velocities)
+        body_weights = np.array([1.0]*3 + [0.0]*3 + [0.0]*model.nv)
+        goalTrackingCost_body = crocoddyl.CostModelResidual(
+            state, crocoddyl.ActivationModelWeightedQuad(body_weights), stateResidual)
+
+        # Wrist: track last 3 joints only (zero out body + velocities)
+        wrist_weights = np.array([0.0]*3 + [1.0]*3 + [0.0]*model.nv)
+        goalTrackingCost_wrist = crocoddyl.CostModelResidual(
+            state, crocoddyl.ActivationModelWeightedQuad(wrist_weights), stateResidual)
         
         # 2. Gravity-Compensated Control Regularization
         try:
             uRegResidual = crocoddyl.ResidualModelControlGrav(state)
         except AttributeError:
             reduced_data = model.createData()
-            u_ref = pin.computeGeneralizedGravity(model, reduced_data, q_goal)
+            u_ref = pin.computeGeneralizedGravity(model, reduced_data, x_goal)
             uRegResidual = crocoddyl.ResidualModelControl(state, u_ref)
         uRegCost = crocoddyl.CostModelResidual(state, uRegResidual)
         
@@ -95,12 +104,14 @@ class RobotController:
         runningCostModel = crocoddyl.CostModelSum(state)
         terminalCostModel = crocoddyl.CostModelSum(state)
 
-        runningCostModel.addCost("gripperPose", goalTrackingCost, track_weight)
+        runningCostModel.addCost("gripperPose", goalTrackingCost_body, track_weight)
+        runningCostModel.addCost("wristPose", goalTrackingCost_wrist, track_weight * 0.1)
         runningCostModel.addCost("ctrlReg", uRegCost, ctrl_weight)
         runningCostModel.addCost("vReg", vRegCost, weight=v_weight)
         runningCostModel.addCost("accReg", accRegCost, weight=acc_weight)
         
-        terminalCostModel.addCost("gripperPose", goalTrackingCost, terminal_pose_weight)
+        terminalCostModel.addCost("gripperPose", goalTrackingCost_body, terminal_pose_weight)
+        terminalCostModel.addCost("wristPose", goalTrackingCost_wrist, terminal_pose_weight * 0.1)
         terminalCostModel.addCost("vReg", vRegCost, weight=terminal_v_weight)
 
         actuationModel = crocoddyl.ActuationModelFull(state)

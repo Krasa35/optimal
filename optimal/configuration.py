@@ -15,3 +15,10 @@ class UR10_sandbox(UR):
 class UR10(UR):
     mjcf_path = "../models/ur10/ur10.xml"
     urdf_path = "../models/ur10/ur10.urdf"
+
+class Trajectories:
+    joint_6dof = [np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            np.array([-1.8, -1.8, 1.8, -1.8, -1.8, 1.8]),
+            np.array([-1.8, -1.2, 1.5, -1.8, -1.8, 1.8]),
+            np.array([-1.8, -1.8, 1.8, -1.8, -1.8, 1.8]),
+            np.array([0.4, -0.4, 1.5, -0.8, 1.5, 0.5])]
