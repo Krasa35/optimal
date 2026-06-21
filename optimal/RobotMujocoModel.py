@@ -138,17 +138,68 @@ class RobotMujocoModel:
             u_real.append(u)
         return np.array(x_real), np.array(u_real)
     
-    def plot_feedback_part(self, u_real, us):
-        closed_loop_part = (np.array(u_real) - np.array(us)) / np.array(us) * 100
-        plt.figure(figsize=(10, 6))
-        for i in range(closed_loop_part.shape[1]):
-            plt.plot(closed_loop_part[:, i], label=f'Joint {i + 1}')
-        plt.xlabel('Time step')
-        plt.ylabel('Feedback contribution (%)')
-        plt.title('Feedback Contribution to Control')
-        plt.ylim(0, 100)
-        plt.legend()
-        plt.grid()
+    def plot_feedback_part(self, u_real, us, dt=None):
+        u_tot = np.array(u_real, dtype=float)
+        u_ff  = np.array(us,     dtype=float)
+        u_fb  = u_tot - u_ff
+        n_joints = u_tot.shape[1]
+        time_axis = np.arange(len(u_tot)) * dt if dt is not None else np.arange(len(u_tot))
+
+        # --- per-joint stats ---
+        rms_tot = np.sqrt(np.mean(u_tot ** 2, axis=0))
+        rms_ff  = np.sqrt(np.mean(u_ff  ** 2, axis=0))
+        rms_fb  = np.sqrt(np.mean(u_fb  ** 2, axis=0))
+        mae_fb  = np.mean(np.abs(u_fb),        axis=0)
+
+        corr = np.array([
+            np.corrcoef(u_ff[:, j], u_tot[:, j])[0, 1]
+            for j in range(n_joints)
+        ])
+
+        print("=" * 55)
+        print(f"{'Joint':<8} {'Corr FF↔tot':>12} {'RMS FF %':>9} {'RMS FB %':>9} {'MAE FB':>9}")
+        print("-" * 55)
+        for j in range(n_joints):
+            denom = rms_tot[j] if rms_tot[j] > 0 else 1.0
+            print(f"  {j+1:<6} {corr[j]:>12.4f} {rms_ff[j]/denom*100:>8.1f}% {rms_fb[j]/denom*100:>8.1f}% {mae_fb[j]:>9.4f}")
+        print("=" * 55)
+        g_rms_tot = np.linalg.norm(u_tot)
+        g_rms_ff  = np.linalg.norm(u_ff)
+        g_rms_fb  = np.linalg.norm(u_fb)
+        print(f"Global FF coverage: {g_rms_ff/g_rms_tot*100:.1f}%   FB correction: {g_rms_fb/g_rms_tot*100:.1f}%")
+        print(f"Global correlation FF↔tot: {np.corrcoef(u_ff.ravel(), u_tot.ravel())[0,1]:.4f}")
+
+        # --- plot: FF vs total overlaid, correction below ---
+        fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        for j in range(n_joints):
+            axes[0].plot(time_axis, u_tot[:, j], label=f'J{j+1} total', alpha=0.8)
+        for j in range(n_joints):
+            axes[0].plot(time_axis, u_ff[:, j],  label=f'J{j+1} FF',    linestyle='--', alpha=0.6)
+        axes[0].set_ylabel('Torque [Nm]')
+        axes[0].set_title('Feedforward vs Total control')
+        axes[0].legend(ncol=n_joints, fontsize=8)
+        axes[0].grid()
+
+        for j in range(n_joints):
+            axes[1].plot(time_axis, u_fb[:, j], label=f'J{j+1}  r={corr[j]:.3f}')
+        axes[1].set_ylabel('FB correction [Nm]')
+        if dt is not None:
+            axes[1].set_xlabel('Time (s)')
+        else:
+            axes[1].set_xlabel('Time step')
+        axes[1].set_title('Closed-loop correction  (u_total − u_ff)')
+        axes[1].legend(ncol=n_joints, fontsize=8)
+        axes[1].axhline(0, color='k', linewidth=0.5)
+        axes[1].grid()
+
+        # Add statistics text box
+        stats_text = f"Global FF coverage: {g_rms_ff/g_rms_tot*100:.1f}%\n"
+        stats_text += f"FB correction: {g_rms_fb/g_rms_tot*100:.1f}%\n"
+        stats_text += f"Global correlation FF↔tot: {np.corrcoef(u_ff.ravel(), u_tot.ravel())[0,1]:.4f}"
+        fig.text(0.99, 0.01, stats_text, ha='right', va='bottom', fontsize=9, 
+                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5), family='monospace')
+
+        plt.tight_layout()
         plt.show()
 
     def visualize(self, mode, xs=None, us=None, dt=0.01, hold=True, kp=None, kd=None, plot=False):

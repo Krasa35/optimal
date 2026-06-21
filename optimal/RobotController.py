@@ -10,9 +10,9 @@ class RobotController:
         self.robot_pin_model = robot_pin_model
         self.robot_data = robot_pin_model.data
 
-    def _calc_pdcontrol(self, x_start, x_goal, T, DT, kp, kd, alpha=0.0, **kwargs):
+    def _calc_pdcontrol(self, x_start, x_goal, T, DT, kp, kd, alpha=0.0, interpolation="quintic", **kwargs):
         pd_controller = PDController(self.robot_pin_model.reduced_model, kp=kp, kd=kd)
-        xs, us = pd_controller.compute_control(x_start=x_start, x_goal=x_goal, horizon=T, control_dt=DT, alpha=alpha)
+        xs, us = pd_controller.compute_control(x_start=x_start, x_goal=x_goal, horizon=T, control_dt=DT, alpha=alpha, interpolation=interpolation)
         return xs, us
     
     def _calc_crocoddylcontrol_basicjoint(self, x_start, x_goal, T, DT, solver=crocoddyl.SolverBoxFDDP, warm_xs=None, warm_us=None, track_weight=1e2, ctrl_weight=5e-2, terminal_weight=1e5, **kwargs):
@@ -61,7 +61,7 @@ class RobotController:
         return np.array(solver.xs), np.array(solver.us)
     
     def _calc_crocoddylcontrol_advancedjoint(self, x_start, x_goal, T, DT, solver=crocoddyl.SolverBoxFDDP, warm_xs=None, warm_us=None, 
-                                             track_weight=1e1, ctrl_weight=1e2, terminal_pose_weight=1e5, v_weight=1e2, acc_weight=1e3, terminal_v_weight=1e-1, **kwargs):
+                                             track_weight=1e3, ctrl_weight=1e-1, terminal_pose_weight=1e6, v_weight=1e-1, acc_weight=1e0, terminal_v_weight=1e-1, **kwargs):
         # Use the reduced model (actuated joints only) so nq == len(joint_names)
         model = self.robot_pin_model.reduced_model
         nv = model.nv
@@ -74,12 +74,12 @@ class RobotController:
         stateResidual = crocoddyl.ResidualModelState(state, x_goal)
 
         # Body: track first 3 joints only (zero out wrist + velocities)
-        body_weights = np.array([1.0]*3 + [0.0]*3 + [0.0]*model.nv)
+        body_weights = np.array([1.0]*min(3, model.nq) + [0.0]*max(0, model.nq - 3) + [0.0]*model.nv)
         goalTrackingCost_body = crocoddyl.CostModelResidual(
             state, crocoddyl.ActivationModelWeightedQuad(body_weights), stateResidual)
 
         # Wrist: track last 3 joints only (zero out body + velocities)
-        wrist_weights = np.array([0.0]*3 + [1.0]*3 + [0.0]*model.nv)
+        wrist_weights = np.array([0.0]*min(3, model.nq) + [1.0]*max(0, model.nq - 3) + [0.0]*model.nv)
         goalTrackingCost_wrist = crocoddyl.CostModelResidual(
             state, crocoddyl.ActivationModelWeightedQuad(wrist_weights), stateResidual)
         
