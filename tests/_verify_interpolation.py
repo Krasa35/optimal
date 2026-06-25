@@ -22,7 +22,7 @@ from optimal.RobotPinocchioModel import RobotPinocchioModel
 from optimal.configuration import UR10_sandbox, Trajectories
 from optimal.metrics import (
     thermal_energy, mechanical_work, peak_power,
-    tracking_error, torque_jerk, plot_metrics,
+    tracking_error, torque_jerk, plot_metrics, plot_controls_and_error, unified_cost
 )
 
 # ── setup (identical to notebook 110_ cell 1) ──────────────────────────────
@@ -119,36 +119,8 @@ for interp in INTERPOLATIONS:
 
     # ── plots (also saved to OUT_DIR) ────────────────────────────────────
     print(f"\n[{interp}] controls + error:")
-    us_plot = np.asarray(us_real)
-    xs_plot = np.asarray(xs_real)
-    t_axis  = np.arange(len(us_plot)) * DT
-
-    fig, (ax_ctrl, ax_err) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-    fig.suptitle(f"PD Control — interpolation: {interp}  (α={ALPHA})", fontsize=13)
-
-    for j in range(us_plot.shape[1]):
-        ax_ctrl.plot(t_axis, us_plot[:, j], label=f"J{j+1}")
-    ax_ctrl.set_ylabel("Torque [Nm]")
-    ax_ctrl.set_title("Real Control (closed-loop torques)")
-    ax_ctrl.legend(ncol=us_plot.shape[1], fontsize=8)
-    ax_ctrl.grid()
-
-    nq_plot = xs_plot.shape[1] // 2
-    targets_arr = [np.asarray(q) for q in path[1:]]
-    q_ref = np.concatenate([np.tile(t, (n, 1)) for t, n in zip(targets_arr, seg)])[:len(xs_plot)]
-    error = np.linalg.norm((xs_plot[:, :nq_plot] - q_ref) * 180.0 / np.pi, axis=1)
-    ax_err.plot(t_axis, error, color="tab:red")
-    for t_sep in np.cumsum(seg[:-1]) * DT:
-        ax_ctrl.axvline(x=t_sep, color="gray", linestyle="--", linewidth=0.8)
-        ax_err.axvline(x=t_sep, color="gray", linestyle="--", linewidth=0.8)
-    ax_err.set_ylabel("Error [deg]")
-    ax_err.set_xlabel("Time [s]")
-    ax_err.set_title("Configuration Error Over Time")
-    ax_err.grid()
-
-    plt.tight_layout()
     with _save_plots(f"{interp}_controls_error"):
-        plt.show()
+        plot_controls_and_error(us_real, xs_real, DT, path[1:], seg, title=f"PD Control — interpolation: {interp}  (α={ALPHA})")
 
     print(f"\n[{interp}] metrics:")
     with _save_plots(f"{interp}_metrics"):
@@ -164,6 +136,7 @@ for interp in INTERPOLATIONS:
     t_err  = tracking_error(xs_arr, path[1:], seg)         # deg
     t_jerk = torque_jerk(us_arr)
     ff_pct, fb_pct = feedback_stats(us_real, us)
+    cost = unified_cost(us_arr, xs_arr, DT, path[1:], seg)
 
     summary.append(dict(
         interpolation  = interp,
@@ -174,18 +147,19 @@ for interp in INTERPOLATIONS:
         torque_jerk    = t_jerk,
         ff_pct         = ff_pct,
         fb_pct         = fb_pct,
+        unified_cost   = cost,
         ctrl_time_s    = ctrl_time,
     ))
 
 # ── summary table ────────────────────────────────────────────────────────────
-print(f"\n\n{'=' * 100}")
+W = 120
+print(f"\n\n{'=' * W}")
 print(f"  SUMMARY   alpha={ALPHA}   kp={cfg.kp}   kd={cfg.kd}")
-print(f"{'=' * 100}")
-hdr = (f"{'Method':<14} {'E_therm[N²m²s]':>16} {'E_mech[J]':>12} "
-       f"{'P_peak[W]':>11} {'Err[deg]':>10} {'Jerk[N²m²/s]':>14} "
-       f"{'FF[%]':>7} {'FB[%]':>7} {'t_ctrl[s]':>11}")
-print(hdr)
-print("-" * 100)
+print(f"{'=' * W}")
+print(f"{'Method':<14} {'E_therm[N²m²s]':>16} {'E_mech[J]':>12} "
+      f"{'P_peak[W]':>11} {'Err[deg]':>10} {'Jerk[N²m²/s]':>14} "
+      f"{'FF[%]':>7} {'FB[%]':>7} {'UnifCost':>14} {'t_ctrl[s]':>11}")
+print("-" * W)
 for r in summary:
     print(
         f"{r['interpolation']:<14} "
@@ -196,7 +170,8 @@ for r in summary:
         f"{r['torque_jerk']:>14.2f} "
         f"{r['ff_pct']:>7.1f} "
         f"{r['fb_pct']:>7.1f} "
+        f"{r['unified_cost']:>14.4e} "
         f"{r['ctrl_time_s']:>11.4f}"
     )
-print("=" * 100)
+print("=" * W)
 print(f"\nPlots saved to: {OUT_DIR.resolve()}")

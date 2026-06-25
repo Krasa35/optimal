@@ -244,7 +244,7 @@ class RobotMujocoModel:
             input("Press Enter to continue...")
         return x_real, u_real
             
-    def mpc_visualize(self, path, compute_control : callable, segment_lengths=None, dt=0.01, hold=True, step=1, zoh=True):
+    def mpc_visualize(self, path, compute_control : callable, segment_lengths=None, dt=0.01, hold=True, step=1, zoh=True, speed=1.0):
         """
         Args:
             step: number of sim steps between OCP re-solves.
@@ -253,6 +253,11 @@ class RobotMujocoModel:
                           Prevents chattering from bang-bang OCP plan oscillations.
                   False → plan-following: apply u_computed[0], [1], … sequentially.
                           Only correct when DT_ocp == sim_dt.
+            speed: real-time factor for visualization wall-clock pacing.
+                          1.0 → real time, 2.0 → 2× faster, 0.5 → slow-motion.
+                          speed <= 0 → run as fast as possible (no pacing).
+                          If a solve overruns its budget the loop falls behind and
+                          stops sleeping until it catches back up (never sleeps negative).
         """
         if compute_control is None:
             raise ValueError("compute_control function must be provided for MPC mode.")
@@ -263,6 +268,9 @@ class RobotMujocoModel:
             warm_xs, warm_us = None, None
             x_computed = None
             u_computed = np.zeros((1, len(self.u_indices)))
+            # Wall-clock pacing reference: wall time should track sim_time / speed.
+            wall_start = time.perf_counter()
+            sim_time = 0.0
             for i in range(len(path) - 1):
                 for _ in range(segment_lengths[i]):
                     u_idx = _ % step
@@ -299,7 +307,15 @@ class RobotMujocoModel:
                     self.data.ctrl[self.u_indices] = u_apply
                     mujoco.mj_step(self.model, self.data)
                     viewer.sync()
-                    time.sleep(dt)
+                    # Real-time pacing: sleep only the time left until sim_time should be
+                    # reached in wall-clock, scaled by `speed`. Never sleeps negative, so
+                    # an overrunning solve simply makes the loop catch up at full speed.
+                    sim_time += dt
+                    if speed > 0:
+                        target_wall = wall_start + sim_time / speed
+                        remaining = target_wall - time.perf_counter()
+                        if remaining > 0:
+                            time.sleep(remaining)
                     x_real.append(np.concatenate([
                         self.data.qpos[self.q_indices],
                         self.data.qvel[self.v_indices],
@@ -328,6 +344,30 @@ class RobotMujocoModel:
             plt.plot(time, controls[:, i], label=f'Joint {i + 1}')
         plt.ylabel('Control value')
         plt.title('Control Trajectory')
+        plt.legend()
+        plt.grid()
+        plt.show()
+
+    def plot_position(self, x_pos, dt=None):
+        '''
+        Plot the joint position trajectory using matplotlib.
+        Args:
+            x_pos (np.ndarray): The state trajectory of shape (T, 2*nq) where the first nq columns are joint positions.
+            dt: timestep in seconds. If None, x-axis is step index.
+        '''
+        x_pos = np.asarray(x_pos)
+        nq = len(self.q_indices)
+        plt.figure(figsize=(10, 6))
+        if dt is not None:
+            time = np.arange(len(x_pos)) * dt
+            plt.xlabel('Time (s)')
+        else:
+            time = np.arange(len(x_pos))
+            plt.xlabel('Time step')
+        for i in range(nq):
+            plt.plot(time, x_pos[:, i], label=f'Joint {i + 1}')
+        plt.ylabel('Joint Position (radians)')
+        plt.title('Joint Position Trajectory')
         plt.legend()
         plt.grid()
         plt.show()

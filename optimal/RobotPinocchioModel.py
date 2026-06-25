@@ -71,6 +71,9 @@ class RobotPinocchioModel:
         parent_joint = self.model.frames[frame_id].parentJoint
         self.model.inertias[parent_joint] += payload
         self.data = self.model.createData()
+        # Invalidate reduced model cache so it gets rebuilt with the new inertia
+        if hasattr(self, '_reduced_model'):
+            del self._reduced_model
 
     def forward_kinematics(self, q_reduced: np.ndarray) -> None:
         """Run FK with a reduced joint position vector (actuated joints only)."""
